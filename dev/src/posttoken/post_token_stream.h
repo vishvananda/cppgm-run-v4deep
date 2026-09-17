@@ -48,6 +48,13 @@ public:
 	void emit_non_whitespace_char(const std::string& data);
 	void emit_eof();
 
+	// Resolves a pending maximal sequence of adjacent string-literals now,
+	// rather than at the next preprocessing-token of another kind.  A consumer
+	// that ends a run of tokens for a reason of its own - PA3 ends one at every
+	// logical line, because phase 3's `new-line` splits them - calls this so a
+	// group cannot concatenate across the boundary.
+	void FinishGroup();
+
 private:
 	// One string-literal spelling inside the pending maximal sequence.  The
 	// bounds index into `group_text_`, which holds the spellings joined by a

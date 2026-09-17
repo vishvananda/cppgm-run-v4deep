@@ -203,6 +203,11 @@ void PostTokenStream::AppendStringLiteral(const std::string& spelling)
 	group_.push_back(pending);
 }
 
+void PostTokenStream::FinishGroup()
+{
+	FlushGroup();
+}
+
 void PostTokenStream::FlushGroup()
 {
 	if (group_.empty())

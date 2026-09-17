@@ -61,5 +61,19 @@ const char* FundamentalTypeName(EFundamentalType type);
 // Size in bytes from the System V AMD64 ABI scalar-type table.
 std::size_t FundamentalTypeSize(EFundamentalType type);
 
+// The course definition of which of them are signed, from the PA3 handout
+// ("It is course-defined (and by the ABI and bootstrap) that following integral
+// types are signed"): `bool`, `wchar_t`, `char`, `signed char` and the four
+// signed integer types are signed; the unsigned integer types, `char16_t` and
+// `char32_t` are unsigned.  This is `std::numeric_limits<T>::is_signed` for the
+// course ABI, kept in the one table that already owns the types' layout so the
+// two facts cannot drift apart.  Non-integral types report false.
+bool FundamentalTypeIsSigned(EFundamentalType type);
+
+// True for the integral types of 3.9.1 - everything but `float`, `double`,
+// `long double`, `void` and `nullptr_t`.  PA3's `integral-literal` is a literal
+// of one of these.
+bool FundamentalTypeIsIntegral(EFundamentalType type);
+
 } // namespace posttoken
 } // namespace cppgm

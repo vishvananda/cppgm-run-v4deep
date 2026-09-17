@@ -71,5 +71,38 @@ std::size_t FundamentalTypeSize(EFundamentalType type)
 	return type < FT_COUNT ? kSizes[type] : 0;
 }
 
+bool FundamentalTypeIsSigned(EFundamentalType type)
+{
+	switch (type)
+	{
+	case FT_SIGNED_CHAR:
+	case FT_SHORT_INT:
+	case FT_INT:
+	case FT_LONG_INT:
+	case FT_LONG_LONG_INT:
+	case FT_WCHAR_T:
+	case FT_CHAR:
+	case FT_BOOL:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool FundamentalTypeIsIntegral(EFundamentalType type)
+{
+	switch (type)
+	{
+	case FT_FLOAT:
+	case FT_DOUBLE:
+	case FT_LONG_DOUBLE:
+	case FT_VOID:
+	case FT_NULLPTR_T:
+		return false;
+	default:
+		return type < FT_COUNT;
+	}
+}
+
 } // namespace posttoken
 } // namespace cppgm
