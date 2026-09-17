@@ -4,10 +4,14 @@
 
 - Stage base commit: `72753f7de48ba2c125c887db4484598bb5ccd3e4` (the PA5 final
   audit, recorded on entry before any stage edit).
-- Last reviewed commit: `f4799570` (the performance fix and the four readings
-  the generated sweep found); the class layout model follows it.
+- Last reviewed commit: `72753f7de48ba2c125c887db4484598bb5ccd3e4`.  No
+  independent audit has reviewed this stage yet, so the reviewed commit is
+  still the one entry recorded; the implementation commits below are
+  unreviewed.
 - Implementation commits: `04cc34b2` (the semantic layer, the dump, the driver
-  and the two PA5 tree extensions) and `f4799570`.
+  and the two PA5 tree extensions), `f4799570` (the child-iteration fix and
+  four readings the sweep found), `9ac13101` (the class layout model) and
+  `fd0945a5` (the conditional operator and `sizeof` of an object).
 - Target: `cppgm++ --emit-types -o <out> <src>...` runs translation phases 1-7
   and the PA5 parse for each primary source, analyses each translation unit
   into scopes, declarations, entities and canonical types, and writes the
