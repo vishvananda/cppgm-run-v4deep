@@ -129,7 +129,7 @@ private:
 
 	// --- classes and enums ----------------------------------------------
 	int ClassDeclaration();
-	int ClassSpecifier();
+	int ClassSpecifier(bool require_semicolon);
 	int ClassForwardDeclaration();
 	int ElaboratedTypeSpecifier();
 	int EnumDeclaration();
@@ -213,6 +213,7 @@ private:
 	int BracedInitList();
 	int LambdaExpression();
 	int NewExpression();
+	int NewInitializer();
 	int DeleteExpression();
 	int TypeIdOrExpr(bool& is_type);
 

@@ -725,7 +725,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 			if(At(posttoken::OP_LBRACE, 1) ||
 			   (At(kIdentifierToken, 1) && AtAny(posttoken::OP_LBRACE, posttoken::OP_LT, 2)))
 			{
-				Add(seq, ClassSpecifier());
+				Add(seq, ClassSpecifier(false));
 			}
 			else
 			{
@@ -948,7 +948,7 @@ int Parser::Declaration()
 		const Mark mark = Take();
 		try
 		{
-			return ClassSpecifier();
+			return ClassSpecifier(true);
 		}
 		catch(const SyntaxError&)
 		{
@@ -1320,7 +1320,7 @@ int Parser::ClassDeclaration()
 	{
 		return ClassForwardDeclaration();
 	}
-	return ClassSpecifier();
+	return ClassSpecifier(true);
 }
 
 int Parser::ClassForwardDeclaration()
@@ -1352,7 +1352,7 @@ int Parser::ElaboratedTypeSpecifier()
 	return node;
 }
 
-int Parser::ClassSpecifier()
+int Parser::ClassSpecifier(bool require_semicolon)
 {
 	const int node = Tag("class-specifier");
 	Add(node, Terminal("class-key", Current()));
@@ -1398,7 +1398,10 @@ int Parser::ClassSpecifier()
 		classes_.pop_back();
 		PopScope();
 	}
-	Accept(posttoken::OP_SEMICOLON);
+	if(require_semicolon || At(posttoken::OP_SEMICOLON))
+	{
+		Expect(posttoken::OP_SEMICOLON, "`;`");
+	}
 	return node;
 }
 
@@ -1642,8 +1645,18 @@ int Parser::SpecialMemberName()
 		int node = kNoSyntaxNode;
 		if(At(posttoken::KW_OPERATOR))
 		{
-			node = UnqualifiedId("identifier");
-			member = true;
+			// Only a conversion function may be qualified: `C::operator+` is
+			// an operator function, which a qualified special member name
+			// does not allow.
+			const Mark operator_mark = Take();
+			Advance();
+			const bool conversion = AtConversionTypeStart();
+			Rollback(operator_mark);
+			if(conversion)
+			{
+				node = UnqualifiedId("identifier");
+				member = true;
+			}
 		}
 		else if(At(posttoken::OP_COMPL))
 		{

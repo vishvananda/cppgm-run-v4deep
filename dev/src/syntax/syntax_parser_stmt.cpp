@@ -662,6 +662,33 @@ int Parser::NewExpression()
 		Add(node, Tag("global-scope"));
 	}
 	Expect(posttoken::KW_NEW, "`new`");
+	if(At(posttoken::OP_LPAREN) && AtTypeSpecifierStart(1))
+	{
+		// `new (int)` is the parenthesized type-id form, not a placement.
+		const Mark mark = Take();
+		Advance();
+		++nested_delim_;
+		bool is_type = false;
+		int type = kNoSyntaxNode;
+		try
+		{
+			type = TypeId();
+			is_type = At(posttoken::OP_RPAREN);
+		}
+		catch(const SyntaxError&)
+		{
+			is_type = false;
+		}
+		--nested_delim_;
+		if(is_type)
+		{
+			Advance();
+			Add(node, type);
+			Add(node, NewInitializer());
+			return PostfixSuffixes(node);
+		}
+		Rollback(mark);
+	}
 	if(At(posttoken::OP_LPAREN))
 	{
 		const int placement = Tag("placement");
@@ -686,13 +713,21 @@ int Parser::NewExpression()
 	// initializer's own `(` must not be read as a declarator, so the type here
 	// is the restricted one.
 	Add(node, ConversionTypeId());
+	Add(node, NewInitializer());
+	return PostfixSuffixes(node);
+}
+
+// The `new-initializer` of a new-expression, which the dump spells as an
+// `initializer` holding a braced-init-list or a paren-initializer.
+int Parser::NewInitializer()
+{
 	if(At(posttoken::OP_LBRACE))
 	{
 		const int init = Tag("initializer");
 		Add(init, BracedInitList());
-		Add(node, init);
+		return init;
 	}
-	else if(At(posttoken::OP_LPAREN))
+	if(At(posttoken::OP_LPAREN))
 	{
 		const int init = Tag("initializer");
 		const int paren = Tag("paren-initializer");
@@ -712,9 +747,9 @@ int Parser::NewExpression()
 		Expect(posttoken::OP_RPAREN, "`)`");
 		--nested_delim_;
 		Add(init, paren);
-		Add(node, init);
+		return init;
 	}
-	return PostfixSuffixes(node);
+	return kNoSyntaxNode;
 }
 
 int Parser::DeleteExpression()
