@@ -698,16 +698,21 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		}
 		if(kind == kIdentifierToken)
 		{
-			if(!IsTypeName(Spelling()))
+			if(saw_type || !IsTypeName(Spelling()))
 			{
+				// Once the sequence has a type specifier, a name begins the
+				// declarator: `typedef int FILE` declares `FILE`.
 				break;
 			}
 			const size_t start = Position();
 			bool seen = false;
 			QualifiedTypeName(seen, true);
-			if(!seen)
+			if(!seen || At(posttoken::OP_COLON2))
 			{
-				break;
+				// The `::` after the name belongs to the name that follows it,
+				// so this is not a decl-specifier-seq at all: `C::operator int`
+				// starts a special member definition and `N::f();` a call.
+				throw SyntaxError("not a type name");
 			}
 			const size_t last = EndPosition();
 			if(last == start + 1)
@@ -908,10 +913,18 @@ int Parser::DeclarationBody(bool allow_function_definition)
 		}
 		if(At(posttoken::KW_TRY) && is_function)
 		{
+			// A function try block belongs to the function definition.
 			const int node = Tag("function-definition");
 			Add(node, specifiers);
 			Add(node, declarator);
-			Add(node, TryBlock());
+			const int body = Tag("function-try-block");
+			Expect(posttoken::KW_TRY, "`try`");
+			Add(body, CompoundStatement());
+			while(At(posttoken::KW_CATCH))
+			{
+				Add(body, Handler());
+			}
+			Add(node, body);
 			return node;
 		}
 		Rollback(mark);
@@ -1165,11 +1178,15 @@ int Parser::TemplateParameter()
 	bool saw_type = false;
 	bool saw_typedef = false;
 	Add(node, DeclSpecifierSeq(saw_type, saw_typedef));
-	if(At(kIdentifierToken))
+	if(At(kIdentifierToken) || At(posttoken::OP_STAR) || At(posttoken::OP_AMP) ||
+	   At(posttoken::OP_LAND))
 	{
-		Bind(Spelling(), kNameValue);
+		if(At(kIdentifierToken))
+		{
+			Bind(Spelling(), kNameValue);
+		}
+		Add(node, Declarator());
 	}
-	Add(node, Declarator());
 	if(Accept(posttoken::OP_ASS))
 	{
 		const int def = Tag("default-template-argument");
@@ -1468,6 +1485,15 @@ int Parser::SpecialMemberName()
 		const size_t start = Position();
 		bool seen = false;
 		const string component = NestedNameSpecifier(seen);
+		if(seen && At(posttoken::KW_OPERATOR))
+		{
+			// A qualified operator or conversion function: `C::operator int`.
+			UnqualifiedId("identifier");
+			if(At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS))
+			{
+				return Named("identifier", JoinedText(start, EndPosition()));
+			}
+		}
 		if(seen && At(kIdentifierToken) && Spelling() == component)
 		{
 			Advance();
@@ -1876,7 +1902,7 @@ int Parser::ParameterClause()
 	SkipAttributes();
 	if(At(posttoken::OP_DOTS))
 	{
-		Add(node, Named("ellipsis", "..."));
+		Add(node, Named("parameter-pack", "..."));
 		Advance();
 		Expect(posttoken::OP_RPAREN, "`)`");
 		--nested_delim_;
@@ -1897,7 +1923,7 @@ void Parser::ParameterDeclarationList(int parent)
 	{
 		if(At(posttoken::OP_DOTS))
 		{
-			Add(parent, Named("ellipsis", "..."));
+			Add(parent, Named("parameter-pack", "..."));
 			Advance();
 			break;
 		}
@@ -2459,7 +2485,7 @@ int Parser::UnqualifiedId(const char* tag)
 	if(At(kIdentifierToken))
 	{
 		const string name = Spelling();
-		if(!IsKnownValue(name) && At(posttoken::OP_LT))
+		if(!IsKnownValue(name) && At(posttoken::OP_LT, 1))
 		{
 			const Mark mark = Take();
 			Advance();
@@ -2472,7 +2498,8 @@ int Parser::UnqualifiedId(const char* tag)
 		Advance();
 		return Named(tag, name);
 	}
-	throw SyntaxError("expected a name");
+		throw SyntaxError("expected a name at token " + to_string(pos_) + " (`" + Spelling() +
+	                  "`)");
 }
 
 string Parser::TextAt(size_t index) const
