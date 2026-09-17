@@ -14,12 +14,8 @@ namespace
 
 using posttoken::ETokenType;
 
-// The precedence levels of the handout's grammar, innermost first.  Each level
-// hands off to the next-tighter one, exactly as the productions nest.
-// The handout's controlling-expression grammar names one production per
-// precedence level; this is the same information as a table, because the level
-// loop is now one function.  All of these operators are left associative, which
-// is what makes the loop's `precedence + 1` recursion bound correct.
+// The loosest precedence in the table, which is where a controlling expression
+// starts.
 const unsigned kLowestBinaryPrecedence = 1;
 
 // Appends the decimal spelling of an unsigned value, low digit last.  The
@@ -69,6 +65,10 @@ bool CtrlExpression::IsIdentifierOrKeyword(const CtrlToken& token)
 	return token.kind == kCtrlSimple && IsKeyword(token.simple);
 }
 
+// The handout's controlling-expression grammar names one production per
+// precedence level; this is the same information as a table, because the level
+// loop is now one function.  Every one of these operators is left associative,
+// which is what makes the loop's `precedence + 1` bound correct.
 const CtrlExpression::BinOpEntry CtrlExpression::kBinaryOps[] =
 {
 	{posttoken::OP_LOR, CtrlExpression::BIN_LOR, 1},
@@ -92,7 +92,7 @@ const CtrlExpression::BinOpEntry CtrlExpression::kBinaryOps[] =
 };
 
 bool CtrlExpression::SignedOverflow(EBinOp op, long long left, long long right,
-                                     long long& result)
+                                    long long& result)
 {
 	switch (op)
 	{
