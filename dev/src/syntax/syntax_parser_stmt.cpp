@@ -96,10 +96,10 @@ int Parser::ExpressionStatement()
 
 bool Parser::StartsDeclarationStatement() const
 {
-	if(At(posttoken::OP_SEMICOLON))
-	{
-		return true;
-	}
+	// A bare `;` is not a declaration here: a null statement is an
+	// expression-statement wherever a statement may appear, and an
+	// empty-declaration only where a declaration may (the dump keeps the two
+	// apart, and `for`'s init reaches the null form before this gate).
 	if(AtAttributes())
 	{
 		return true;
@@ -129,7 +129,13 @@ bool Parser::StartsDeclarationStatement() const
 	default:
 		break;
 	}
-	if(IsSimpleTypeSpecifierKind(kind) || IsCv(kind))
+	// The same set `CanStartDeclSpecifier` accepts, so a statement that begins
+	// with a decl-specifier is offered to the declaration reading: `typename`,
+	// a leading `::` and every storage specifier included.  The declaration
+	// reading rolls back to an expression statement when it fails, so offering
+	// it one is never wrong, only work.
+	if(IsSimpleTypeSpecifierKind(kind) || IsCv(kind) || IsStorageSpecifierKind(kind) ||
+	   kind == posttoken::KW_TYPENAME || kind == posttoken::OP_COLON2)
 	{
 		return true;
 	}
@@ -713,7 +719,7 @@ int Parser::NewExpression()
 		const size_t start = Position();
 		const int placement = Tag("placement");
 		Add(placement, ParenArgumentList());
-		arena_.SetLabel(placement, JoinedText(start, EndPosition()));
+		arena_.SetLabel(placement, RangeText(start));
 		Add(node, placement);
 	}
 	// A parenthesized type-id after `new` is a pointer-to-array new; the
@@ -841,7 +847,7 @@ int Parser::PostfixSuffixes(int node)
 			const int name = IdExpression("identifier");
 			if(dependent)
 			{
-				arena_.SetLabel(name, JoinedText(name_start, EndPosition()));
+				arena_.SetLabel(name, RangeText(name_start));
 			}
 			Add(member, name);
 			node = member;
@@ -1091,7 +1097,7 @@ int Parser::LambdaExpression()
 		}
 	}
 	Expect(posttoken::OP_RSQUARE, "`]`");
-	Add(node, Named("lambda-introducer", JoinedText(start, EndPosition())));
+	Add(node, Named("lambda-introducer", RangeText(start)));
 	if(At(posttoken::OP_LPAREN))
 	{
 		const int declarator = Tag("lambda-declarator");

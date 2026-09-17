@@ -254,8 +254,10 @@ const char* SyntaxTokenKindName(int kind)
 // Cursor
 // ---------------------------------------------------------------------------
 
-Parser::Parser(const vector<SyntaxToken>& tokens, SyntaxArena& arena)
+Parser::Parser(const vector<SyntaxToken>& tokens, const SyntaxSpellingPool& spellings,
+               SyntaxArena& arena)
 	: tokens_(tokens)
+	, spellings_(spellings)
 	, arena_(arena)
 	, pos_(0)
 	, rshift_split_(false)
@@ -300,13 +302,13 @@ const SyntaxToken& Parser::TokenAt(size_t offset) const
 	return index < tokens_.size() ? tokens_[index] : tokens_.back();
 }
 
-string Parser::Spelling(size_t offset) const
+const string& Parser::Spelling(size_t offset) const
 {
 	if(offset == 0 && rshift_split_)
 	{
-		return string(">");
+		return spellings_.Text(spellings_.Greater());
 	}
-	return TokenAt(offset).spelling;
+	return SpellingOf(TokenAt(offset));
 }
 
 const SyntaxToken& Parser::Current() const
@@ -314,7 +316,7 @@ const SyntaxToken& Parser::Current() const
 	if(rshift_split_)
 	{
 		split_token_.kind = posttoken::OP_GT;
-		split_token_.spelling = ">";
+		split_token_.spelling = spellings_.Greater();
 		return split_token_;
 	}
 	return TokenAt();
@@ -385,7 +387,7 @@ string Parser::JoinedText(size_t first, size_t last) const
 	string text;
 	for(size_t index = first; index < last && index < tokens_.size(); ++index)
 	{
-		const string& spelling = tokens_[index].spelling;
+		const string& spelling = SpellingOf(tokens_[index]);
 		if(!text.empty() && IsIdentChar(text[text.size() - 1]) && !spelling.empty() &&
 		   IsIdentChar(spelling[0]))
 		{
@@ -396,11 +398,32 @@ string Parser::JoinedText(size_t first, size_t last) const
 	return text;
 }
 
-string Parser::TokenLabel(const SyntaxToken& token)
+const string& Parser::SpellingOf(const SyntaxToken& token) const
+{
+	return spellings_.Text(token.spelling);
+}
+
+// The text of the tokens from `start` up to the cursor, which is what the dump
+// prints for a name, a type-name or a declarator-id.  A `>>` whose first `>` a
+// close-angle-bracket took is one token in the stream and two closers in the
+// grammar, so a name that closed itself with that first `>` keeps one `>` in
+// its text: the token's other half closes the construct the name is written
+// inside, and writing it here would spell a `>` the name does not own.
+string Parser::RangeText(size_t start) const
+{
+	string text = JoinedText(start, pos_);
+	if(rshift_split_)
+	{
+		text += '>';
+	}
+	return text;
+}
+
+string Parser::TokenLabel(const SyntaxToken& token) const
 {
 	string label(SyntaxTokenKindName(token.kind));
 	label += ':';
-	label += token.spelling;
+	label += SpellingOf(token);
 	return label;
 }
 
@@ -410,10 +433,17 @@ Parser::Mark Parser::Take() const
 	mark.pos = pos_;
 	mark.rshift = rshift_split_;
 	mark.delim = nested_delim_;
-	mark.nodes = arena_.NodeCount();
+	mark.only = declaration_only_;
+	mark.tree = arena_.Take();
 	mark.scopes = scopes_.size();
 	mark.bindings = bindings_.size();
 	mark.classes = classes_.size();
+	mark.angle = angle_depth_;
+	mark.angles = angle_speculative_.size();
+	mark.logical = angle_logical_.size();
+	mark.delims = angle_delims_.size();
+	mark.next_angle = next_angle_speculative_;
+	mark.logical_top = angle_logical_.empty() ? false : angle_logical_.back() != 0;
 	return mark;
 }
 
@@ -425,7 +455,8 @@ void Parser::Rollback(const Mark& mark)
 	// and a `>` inside an angle list is an operator or the list's closer by
 	// that count alone, so the checkpoint carries it too.
 	nested_delim_ = mark.delim;
-	arena_.DropTo(mark.nodes);
+	declaration_only_ = mark.only;
+	arena_.Drop(mark.tree);
 	while(scopes_.size() > mark.scopes)
 	{
 		DropBindings(scopes_.size() - 1);
@@ -456,6 +487,18 @@ void Parser::Rollback(const Mark& mark)
 	while(classes_.size() > mark.classes)
 	{
 		classes_.pop_back();
+	}
+	// The angle lists an alternative opened come back to the state the mark
+	// saw, including the innermost list's logical-operator flag, which is set
+	// in place rather than pushed.
+	angle_depth_ = mark.angle;
+	next_angle_speculative_ = mark.next_angle;
+	angle_speculative_.resize(mark.angles);
+	angle_delims_.resize(mark.delims);
+	angle_logical_.resize(mark.logical);
+	if(!angle_logical_.empty())
+	{
+		angle_logical_.back() = mark.logical_top ? 1 : 0;
 	}
 }
 
@@ -571,9 +614,10 @@ int Parser::Run()
 	return unit;
 }
 
-int ParseTranslationUnit(const vector<SyntaxToken>& tokens, SyntaxArena& arena)
+int ParseTranslationUnit(const vector<SyntaxToken>& tokens,
+                         const SyntaxSpellingPool& spellings, SyntaxArena& arena)
 {
-	Parser parser(tokens, arena);
+	Parser parser(tokens, spellings, arena);
 	return parser.Run();
 }
 
@@ -732,7 +776,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 			Expect(posttoken::OP_LPAREN, "`(`");
 			const int operand = Expression();
 			Expect(posttoken::OP_RPAREN, "`)`");
-			const int node = Named("decl-specifier", JoinedText(start, EndPosition()));
+			const int node = Named("decl-specifier", RangeText(start));
 			Add(node, operand);
 			Add(seq, node);
 			saw_type = true;
@@ -773,8 +817,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 			{
 				break;
 			}
-			const size_t last = EndPosition();
-			Add(seq, Named("decl-specifier", JoinedText(start, last)));
+			Add(seq, Named("decl-specifier", RangeText(start)));
 			saw_type = true;
 			continue;
 		}
@@ -801,14 +844,13 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 				throw SyntaxError("not a type name at token " + to_string(pos_) + " (`" +
 				                  Spelling() + "`)");
 			}
-			const size_t last = EndPosition();
-			if(last == start + 1)
+			if(EndPosition() == start + 1)
 			{
 				Add(seq, Terminal("decl-specifier", tokens_[start]));
 			}
 			else
 			{
-				Add(seq, Named("decl-specifier", JoinedText(start, last)));
+				Add(seq, Named("decl-specifier", RangeText(start)));
 			}
 			saw_type = true;
 			continue;
@@ -958,7 +1000,18 @@ int Parser::Declaration()
 		if(At(posttoken::OP_LBRACE, cursor) || At(posttoken::OP_COLON, cursor) ||
 		   At(posttoken::OP_SEMICOLON, cursor))
 		{
-			return EnumSpecifier();
+			// A class body is the one place the dump writes the specifier as an
+			// ordinary declaration of it, which is what the ordinary path
+			// gives.  Everywhere else `enum-declaration` is `enum-specifier ;`:
+			// the specifier is not a decl-specifier, so it stands alone and the
+			// `;` closes it, which is what rejects `enum E { a } e;`.
+			if(declaration_only_ == 0 || classes_.empty())
+			{
+				const int node = EnumSpecifier();
+				Expect(posttoken::OP_SEMICOLON, "`;`");
+				return node;
+			}
+			return DeclarationCommon(true);
 		}
 		return DeclarationCommon(true);
 	}
@@ -1124,7 +1177,7 @@ int Parser::NamespaceAliasDefinition()
 	const size_t start = Position();
 	bool seen = false;
 	QualifiedTypeName(seen, false);
-	Add(node, Named("target", JoinedText(start, EndPosition())));
+	Add(node, Named("target", RangeText(start)));
 	Expect(posttoken::OP_SEMICOLON, "`;`");
 	return node;
 }
@@ -1137,7 +1190,7 @@ int Parser::UsingDirective()
 	const size_t start = Position();
 	bool seen = false;
 	QualifiedTypeName(seen, false);
-	Add(node, Named("target", JoinedText(start, EndPosition())));
+	Add(node, Named("target", RangeText(start)));
 	Expect(posttoken::OP_SEMICOLON, "`;`");
 	return node;
 }
@@ -1147,8 +1200,12 @@ int Parser::UsingDeclaration()
 	const int node = Tag("using-declaration");
 	Expect(posttoken::KW_USING, "`using`");
 	const size_t start = Position();
+	// The name is read for its spelling, which the target label carries; the
+	// tree it builds is released here rather than left in the arena.
+	const SyntaxArena::Mark before = arena_.Take();
 	IdExpression("id-expression");
-	Add(node, Named("target", JoinedText(start, EndPosition())));
+	arena_.Drop(before);
+	Add(node, Named("target", RangeText(start)));
 	Expect(posttoken::OP_SEMICOLON, "`;`");
 	return node;
 }
@@ -1361,7 +1418,7 @@ int Parser::NonTypeTemplateParameter()
 	// = 0` - has its default's literal spelled with its token kind in the
 	// dump; every other form spells the literal alone.
 	const bool bare_specifier = specifiers != kNoSyntaxNode &&
-	    arena_.Node(specifiers).children.size() == 1 && last_specifier_keyword_type_;
+	    arena_.ChildCount(specifiers) == 1 && last_specifier_keyword_type_;
 	if(At(posttoken::OP_DOTS))
 	{
 		Add(node, Named("parameter-pack", "..."));
@@ -1450,6 +1507,31 @@ bool Parser::ClassBodyHasInlineMemberDefinition() const
 	return false;
 }
 
+// Consumes a braced body up to but not including its closing `}`, which is
+// where the caller's member loop expects to be left.  The braces are already
+// balanced around the cursor, and a body is a run of tokens whose structure is
+// not this parse's business.
+void Parser::SkipBracedBody()
+{
+	int depth = 0;
+	while(!AtEof())
+	{
+		if(At(posttoken::OP_LBRACE))
+		{
+			++depth;
+		}
+		else if(At(posttoken::OP_RBRACE))
+		{
+			if(depth == 0)
+			{
+				return;
+			}
+			--depth;
+		}
+		Advance();
+	}
+}
+
 // `class-key name` where a type name is expected, as in `sizeof(struct S)`.
 int Parser::ElaboratedTypeSpecifier()
 {
@@ -1482,7 +1564,7 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		{
 			// A specialization's class head keeps the argument list in its name.
 		}
-		arena_.SetLabel(node, JoinedText(start, EndPosition()));
+		arena_.SetLabel(node, RangeText(start));
 		if(!name.empty())
 		{
 			Bind(name, kNameType);
@@ -1504,22 +1586,32 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		classes_.push_back(name);
 		++declaration_only_;
 		Advance();
-		if(ClassBodyHasInlineMemberDefinition())
+		if(collecting_names_)
+		{
+			// The names a nested class declares are not names of the class
+			// being collected, so its body is skipped whole rather than read a
+			// second time: reading it here is what would make the collecting
+			// pass multiply with the nesting depth.  The real pass reads it.
+			SkipBracedBody();
+		}
+		else if(ClassBodyHasInlineMemberDefinition())
 		{
 			// A member function body may name a type its class declares after
 			// it, so the members are read once for their names - which are not
 			// rolled back - and then again for the tree.
 			const size_t saved_pos = pos_;
 			const bool saved_rshift = rshift_split_;
-			const size_t saved_nodes = arena_.NodeCount();
+			const SyntaxArena::Mark saved_arena = arena_.Take();
 			const size_t saved_scopes = scopes_.size();
-			const size_t saved_bindings = bindings_.size();
 			const size_t saved_classes = classes_.size();
 			const int saved_angle = angle_depth_;
 			const int saved_delim = nested_delim_;
 			const size_t saved_angles = angle_speculative_.size();
 			const size_t saved_logical = angle_logical_.size();
 			const size_t saved_delims = angle_delims_.size();
+			const bool saved_logical_top = angle_logical_.empty()
+			    ? false
+			    : angle_logical_.back() != 0;
 			collecting_names_ = true;
 			try
 			{
@@ -1534,15 +1626,16 @@ int Parser::ClassSpecifier(bool require_semicolon)
 			collecting_names_ = false;
 			pos_ = saved_pos;
 			rshift_split_ = saved_rshift;
-			arena_.DropTo(saved_nodes);
+			arena_.Drop(saved_arena);
 			while(scopes_.size() > saved_scopes)
 			{
 				DropBindings(scopes_.size() - 1);
 				scopes_.pop_back();
 			}
-			// The names the collecting pass bound stay bound: they are what it
-			// was run for, so its bindings leave the undo log here.
-			bindings_.resize(saved_bindings);
+			// The names the collecting pass bound stay bound - they are what
+			// it was run for - and they stay in the undo log with them, so a
+			// later rollback that reaches past the class undoes them by the
+			// same identity rule as any other binding.
 			while(classes_.size() > saved_classes)
 			{
 				classes_.pop_back();
@@ -1552,6 +1645,10 @@ int Parser::ClassSpecifier(bool require_semicolon)
 			angle_speculative_.resize(saved_angles);
 			angle_logical_.resize(saved_logical);
 			angle_delims_.resize(saved_delims);
+			if(!angle_logical_.empty())
+			{
+				angle_logical_.back() = saved_logical_top ? 1 : 0;
+			}
 		}
 		while(!At(posttoken::OP_RBRACE) && !AtEof())
 		{
@@ -1593,7 +1690,7 @@ int Parser::BaseClause()
 		const size_t start = Position();
 		bool seen = false;
 		QualifiedTypeName(seen, false);
-		Add(specifier, Named("base-name", JoinedText(start, EndPosition())));
+		Add(specifier, Named("base-name", RangeText(start)));
 		if(At(posttoken::OP_DOTS))
 		{
 			Add(specifier, Terminal("pack-expansion", Current()));
@@ -1657,7 +1754,6 @@ int Parser::EnumSpecifier()
 		}
 		Expect(posttoken::OP_RBRACE, "`}`");
 	}
-	Accept(posttoken::OP_SEMICOLON);
 	return node;
 }
 
@@ -1838,7 +1934,7 @@ int Parser::SpecialMemberName()
 		if(member && (At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS)))
 		{
 			(void)node;
-			return Named("identifier", JoinedText(start, EndPosition()));
+			return Named("identifier", RangeText(start));
 		}
 	}
 	Rollback(mark);
@@ -1893,16 +1989,13 @@ int Parser::SpecialMember()
 			Add(node, specs);
 		}
 		Add(node, declarator);
-		const int initializer = Tag("special-member-initializer");
+		// The same shape `Initializer` gives `= default` and `= delete`, which
+		// is what the dump spells for either path.
+		const int initializer = Tag("initializer");
 		Advance();
-		if(At(posttoken::KW_DEFAULT))
+		if(At(posttoken::KW_DEFAULT) || At(posttoken::KW_DELETE))
 		{
-			Add(initializer, Named("default", TokenLabel(Current())));
-			Advance();
-		}
-		else if(At(posttoken::KW_DELETE))
-		{
-			Add(initializer, Named("delete", TokenLabel(Current())));
+			Add(initializer, Named("special-initializer", Spelling()));
 			Advance();
 		}
 		else
@@ -1912,6 +2005,31 @@ int Parser::SpecialMember()
 		}
 		Add(node, initializer);
 		Expect(posttoken::OP_SEMICOLON, "`;`");
+		return node;
+	}
+	if(At(posttoken::KW_TRY))
+	{
+		// A special member's body may be a function try block, whose initializer
+		// and body are the try block's children rather than the definition's.
+		const int node = Tag("special-member-definition");
+		arena_.SetLabel(node, arena_.Text(arena_.Node(name).label));
+		if(specs != kNoSyntaxNode)
+		{
+			Add(node, specs);
+		}
+		Add(node, declarator);
+		const int body = Tag("function-try-block");
+		Expect(posttoken::KW_TRY, "`try`");
+		if(At(posttoken::OP_COLON))
+		{
+			Add(body, CtorInitializer());
+		}
+		Add(body, CompoundStatement());
+		while(At(posttoken::KW_CATCH))
+		{
+			Add(body, Handler());
+		}
+		Add(node, body);
 		return node;
 	}
 	if(At(posttoken::OP_COLON) || At(posttoken::OP_LBRACE))
@@ -1960,7 +2078,7 @@ int Parser::CtorInitializer()
 		{
 			DecltypeSpecifier();
 		}
-		Add(initializer, Named("mem-initializer-id", JoinedText(start, EndPosition())));
+		Add(initializer, Named("mem-initializer-id", RangeText(start)));
 		if(At(posttoken::OP_LBRACE))
 		{
 			Add(initializer, BracedInitList());
@@ -2015,6 +2133,7 @@ int Parser::PtrOperator()
 
 int Parser::Declarator()
 {
+	const SyntaxArena::Mark opened = arena_.Take();
 	const int node = Tag("declarator");
 	declarator_is_function_ = false;
 	for(;;)
@@ -2038,7 +2157,7 @@ int Parser::Declarator()
 				break;
 			}
 			Advance();
-			Add(node, Named("ptr-operator", JoinedText(start, EndPosition())));
+			Add(node, Named("ptr-operator", RangeText(start)));
 		}
 		else
 		{
@@ -2050,7 +2169,7 @@ int Parser::Declarator()
 			Advance();
 		}
 	}
-	bool has_content = !arena_.Node(node).children.empty();
+	bool has_content = arena_.ChildCount(node) != 0;
 	if(At(posttoken::OP_LPAREN))
 	{
 		Advance();
@@ -2086,7 +2205,7 @@ int Parser::Declarator()
 	if(!has_content)
 	{
 		// An empty declarator is not one; the caller's abstract reading is.
-		arena_.DropTo(static_cast<size_t>(node));
+		arena_.Drop(opened);
 		throw SyntaxError("expected a declarator at token " + to_string(pos_) + " (`" +
 		                  Spelling() + "`)");
 	}
@@ -2212,7 +2331,7 @@ int Parser::FunctionSuffix(bool lambda_mode)
 			Add(node, Expression());
 			Expect(posttoken::OP_RPAREN, "`)`");
 		}
-		arena_.SetLabel(node, JoinedText(start, EndPosition()));
+		arena_.SetLabel(node, RangeText(start));
 		return node;
 	}
 	if(kind == posttoken::KW_THROW)
@@ -2225,8 +2344,12 @@ int Parser::FunctionSuffix(bool lambda_mode)
 		{
 			for(;;)
 			{
+				// As for a template argument, a `throw` list is spelled into
+				// the qualifier's label, so the reading releases its tree.
+				const SyntaxArena::Mark before = arena_.Take();
 				bool is_type = false;
 				TypeIdOrExpr(is_type);
+				arena_.Drop(before);
 				if(!Accept(posttoken::OP_COMMA))
 				{
 					break;
@@ -2234,7 +2357,7 @@ int Parser::FunctionSuffix(bool lambda_mode)
 			}
 		}
 		Expect(posttoken::OP_RPAREN, "`)`");
-		arena_.SetLabel(node, JoinedText(start, EndPosition()));
+		arena_.SetLabel(node, RangeText(start));
 		return node;
 	}
 	if(kind == posttoken::OP_ARROW)
@@ -2245,7 +2368,7 @@ int Parser::FunctionSuffix(bool lambda_mode)
 		Add(node, TypeId());
 		if(!lambda_mode)
 		{
-			arena_.SetLabel(node, JoinedText(start + 1, EndPosition()));
+			arena_.SetLabel(node, RangeText(start + 1));
 		}
 		return node;
 	}
@@ -2485,10 +2608,10 @@ int Parser::AbstractDeclaratorBody(bool in_parameter)
 int Parser::PtrOperatorsIn(int node) const
 {
 	int count = 0;
-	const vector<int>& children = arena_.Node(node).children;
-	for(size_t index = 0; index < children.size(); ++index)
+	const size_t children = arena_.ChildCount(node);
+	for(size_t index = 0; index < children; ++index)
 	{
-		const int child = children[index];
+		const int child = arena_.ChildAt(node, index);
 		const string& tag = arena_.Text(arena_.Node(child).tag);
 		if(tag == "ptr-operator")
 		{

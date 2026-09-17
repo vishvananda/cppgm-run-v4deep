@@ -44,7 +44,8 @@ enum ENameKind
 class Parser
 {
 public:
-	Parser(const std::vector<SyntaxToken>& tokens, SyntaxArena& arena);
+	Parser(const std::vector<SyntaxToken>& tokens, const SyntaxSpellingPool& spellings,
+	       SyntaxArena& arena);
 
 	int Run();
 
@@ -55,7 +56,7 @@ private:
 	bool AtAny(int first, int second, std::size_t offset = 0) const;
 	bool AtEof() const;
 	const SyntaxToken& TokenAt(std::size_t offset = 0) const;
-	std::string Spelling(std::size_t offset = 0) const;
+	const std::string& Spelling(std::size_t offset = 0) const;
 	const SyntaxToken& Current() const;
 	void Advance();
 	bool Accept(int kind);
@@ -64,12 +65,16 @@ private:
 	std::size_t EndPosition() const;
 
 	std::string JoinedText(std::size_t first, std::size_t last) const;
+	std::string RangeText(std::size_t start) const;
 
 	// --- rollback -------------------------------------------------------
-	// A cursor checkpoint: the token position, the split `>>`, the open
-	// delimiter count, and the counts of the tree, the name table and the
-	// class stack that a failed alternative restores.
-	struct Mark { std::size_t pos; bool rshift; int delim; std::size_t nodes; std::size_t scopes; std::size_t bindings; std::size_t classes; };
+	// A cursor checkpoint.  A failed speculative alternative restores every
+	// piece of state it can have changed: the token position, the split `>>`,
+	// the open delimiter count, the open angle lists, the tree, the name
+	// table and the class stack.  `parsing.md` asks for all of it: restoring
+	// the position alone can make a later alternative see a reading that never
+	// happened.
+	struct Mark { std::size_t pos; bool rshift; int delim; int only; SyntaxArena::Mark tree; std::size_t scopes; std::size_t bindings; std::size_t classes; int angle; std::size_t angles; std::size_t logical; std::size_t delims; bool next_angle; bool logical_top; };
 
 	// One name a scope bound, and the category the name held in that scope
 	// before it, so undoing the binding restores the name rather than
@@ -84,7 +89,8 @@ private:
 	int Tag(const char* name);
 	int Named(const char* name, const std::string& label);
 	int Terminal(const char* name, const SyntaxToken& token);
-	static std::string TokenLabel(const SyntaxToken& token);
+	std::string TokenLabel(const SyntaxToken& token) const;
+	const std::string& SpellingOf(const SyntaxToken& token) const;
 	void Add(int parent, int child);
 
 	// --- name categories ------------------------------------------------
@@ -132,6 +138,7 @@ private:
 	int ClassDeclaration();
 	int ClassSpecifier(bool require_semicolon);
 	bool ClassBodyHasInlineMemberDefinition() const;
+	void SkipBracedBody();
 	int ClassForwardDeclaration();
 	int ElaboratedTypeSpecifier();
 	int EnumSpecifier();
@@ -219,6 +226,7 @@ private:
 	int TypeIdOrExpr(bool& is_type);
 
 	const std::vector<SyntaxToken>& tokens_;
+	const SyntaxSpellingPool& spellings_;
 	SyntaxArena& arena_;
 	std::size_t pos_;
 	bool rshift_split_;
@@ -250,7 +258,8 @@ private:
 
 // Parses one translation unit's tokens and returns the root node, throwing
 // `SyntaxError` when the source is outside the PA5 subset.
-int ParseTranslationUnit(const std::vector<SyntaxToken>& tokens, SyntaxArena& arena);
+int ParseTranslationUnit(const std::vector<SyntaxToken>& tokens,
+                         const SyntaxSpellingPool& spellings, SyntaxArena& arena);
 
 // The name a token's kind is spelled with in the PA5 dump: `KW_INT`, `OP_PLUS`,
 // `TT_IDENTIFIER`, `TT_LITERAL` or `ST_EOF`.

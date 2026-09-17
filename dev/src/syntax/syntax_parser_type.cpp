@@ -45,6 +45,7 @@ int Parser::ConversionTypeId()
 {
 	const int node = Tag("type-id");
 	Add(node, TypeSpecifierSeq());
+	const SyntaxArena::Mark after_type = arena_.Take();
 	const int abstract_node = Tag("abstract-declarator");
 	while(At(posttoken::OP_STAR) || At(posttoken::OP_AMP) || At(posttoken::OP_LAND))
 	{
@@ -67,9 +68,9 @@ int Parser::ConversionTypeId()
 		}
 		break;
 	}
-	if(!any && arena_.Node(abstract_node).children.empty())
+	if(!any && arena_.ChildCount(abstract_node) == 0)
 	{
-		arena_.DropTo(static_cast<size_t>(abstract_node));
+		arena_.Drop(after_type);
 		return node;
 	}
 	Add(node, abstract_node);
@@ -112,7 +113,7 @@ int Parser::TypeSpecifierSeq()
 			{
 				break;
 			}
-			Add(node, Named("type-name", JoinedText(start, EndPosition())));
+			Add(node, Named("type-name", RangeText(start)));
 			any = true;
 			continue;
 		}
@@ -316,7 +317,7 @@ int Parser::DecltypeSpecifier()
 	Expect(posttoken::OP_LPAREN, "`(`");
 	Add(node, Expression());
 	Expect(posttoken::OP_RPAREN, "`)`");
-	arena_.SetLabel(node, JoinedText(start, EndPosition()));
+	arena_.SetLabel(node, RangeText(start));
 	return node;
 }
 
@@ -427,11 +428,17 @@ void Parser::TemplateArgumentList()
 // The choice between `type-id` and `assignment-expression` is the one place the
 // grammar needs later semantics, so it is made speculatively: an argument that
 // reads as a type-id and stops at `,` or the closer is one.
+//
+// An argument carries no node of its own: the template-id's label is the token
+// range the argument list covers, so what the argument is decides where that
+// range ends and nothing else.  The tree the argument builds while deciding is
+// therefore released as soon as the decision is made, on both readings - a
+// discarded reading must not stay in the arena.
 void Parser::TemplateArgument()
 {
+	const Mark mark = Take();
 	if(AtTypeSpecifierStart())
 	{
-		const Mark mark = Take();
 		bool ok = false;
 		try
 		{
@@ -445,6 +452,7 @@ void Parser::TemplateArgument()
 		}
 		if(ok)
 		{
+			arena_.Drop(mark.tree);
 			// A pack expansion argument keeps the `...` its operand wrote.
 			Accept(posttoken::OP_DOTS);
 			return;
@@ -452,6 +460,7 @@ void Parser::TemplateArgument()
 		Rollback(mark);
 	}
 	AssignmentExpression();
+	arena_.Drop(mark.tree);
 	Accept(posttoken::OP_DOTS);
 }
 
@@ -494,7 +503,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 			}
 			if(At(posttoken::OP_LT) && TryTemplateIdTail())
 			{
-				return Named(tag, JoinedText(start, EndPosition()));
+				return Named(tag, RangeText(start));
 			}
 			return Named(tag, name);
 		}
@@ -527,7 +536,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 		{
 			const size_t type_start = Position();
 			ConversionTypeId();
-			name += JoinedText(type_start, EndPosition());
+			name += RangeText(type_start);
 			return Named(tag, name);
 		}
 		if(IsOperatorTokenKind(KindAt()))
@@ -535,7 +544,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 			Advance();
 			if(At(posttoken::OP_LT) && TryTemplateIdTail())
 			{
-				return Named(tag, JoinedText(start, EndPosition()));
+				return Named(tag, RangeText(start));
 			}
 			return Named(tag, name + TextAt(start + 1));
 		}
@@ -547,7 +556,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 		if(At(posttoken::KW_DECLTYPE))
 		{
 			DecltypeSpecifier();
-			return Named(tag, JoinedText(start, EndPosition()));
+			return Named(tag, RangeText(start));
 		}
 		const string name = Spelling();
 		Expect(kIdentifierToken, "a class name");
@@ -576,7 +585,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 			Advance();
 			if(TryTemplateIdTail(true))
 			{
-				return Named(tag, JoinedText(start, EndPosition()));
+				return Named(tag, RangeText(start));
 			}
 			Rollback(mark);
 		}
@@ -589,7 +598,7 @@ int Parser::UnqualifiedId(const char* tag, bool qualified, bool template_keyword
 
 string Parser::TextAt(size_t index) const
 {
-	return index < tokens_.size() ? tokens_[index].spelling : string();
+	return index < tokens_.size() ? SpellingOf(tokens_[index]) : string();
 }
 
 int Parser::IdExpression(const char* tag)
@@ -611,7 +620,7 @@ int Parser::IdExpression(const char* tag)
 	const int node = UnqualifiedId(tag, qualified, template_keyword);
 	if(qualified)
 	{
-		arena_.SetLabel(node, JoinedText(start, EndPosition()));
+		arena_.SetLabel(node, RangeText(start));
 	}
 	return node;
 }

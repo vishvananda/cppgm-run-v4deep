@@ -24,14 +24,16 @@
 # TSV next to the generated corpus.
 #
 # The noise floor is the median absolute deviation of the A/A paired
-# differences, not their min..max range: one delayed run moves the range by
-# hundreds of milliseconds and would let a single outlier either manufacture or
-# mask a result.  The range is still printed so an excursion larger than the
-# measured effect stays visible.
+# differences - the median of |difference - median difference| - not their
+# min..max range: one delayed run moves the range by hundreds of milliseconds
+# and would let a single outlier either manufacture or mask a result.  The range
+# is still printed so an excursion larger than the measured effect stays visible.
 #
 # `cppgm++ --emit-ast` has no executable output, so only compiler latency, peak
 # RSS and the size of the dump are reported; there is no generated-program
 # runtime at this stage, and no telemetry surface is invented to report one.
+# The dump's line count is the tree's node count, which is the one size counter
+# this stage's work has.
 #
 # This is a personal benchmark: it is not part of the course contract and is not
 # discovered by `make test`.
@@ -156,11 +158,11 @@ sub summarize
 sub robust_spread
 {
 	my ($values) = @_;
-	my @sorted = sort { $a <=> $b } map { abs($_) } @{$values};
+	my ($median, $min, $max) = summarize($values);
+	my @sorted = sort { $a <=> $b } map { abs($_ - $median) } @{$values};
 	my $count = scalar(@sorted);
 	my $mad = $count % 2 ? $sorted[($count - 1) / 2]
 		: ($sorted[$count / 2 - 1] + $sorted[$count / 2]) / 2;
-	my ($median, $min, $max) = summarize($values);
 	my $negative = scalar(grep { $_ < 0 } @{$values});
 	return ($median, $min, $max, $mad, $negative, $count);
 }
@@ -218,7 +220,12 @@ system("$ref --emit-ast -o $outdir/ref.txt $corpus > /dev/null 2>&1") == 0
 	or die "reference compiler failed on the corpus\n";
 system("cmp -s $outdir/mine.txt $outdir/ref.txt") == 0
 	or die "student and reference dumps differ\n";
-printf "dump: %d bytes, byte-identical\n", -s "$outdir/mine.txt";
+my $dump_lines = 0;
+open(my $dump, '<', "$outdir/mine.txt") or die "cannot read the dump: $!";
+$dump_lines++ while <$dump>;
+close($dump);
+printf "dump: %d bytes, %d lines (one per syntax node), byte-identical\n",
+	-s "$outdir/mine.txt", $dump_lines;
 
 open(my $log, '>', $tsv) or die "cannot write $tsv: $!";
 print $log "arm\tlabel\tlatency_s\tpeak_rss_kb\n";

@@ -1,7 +1,7 @@
 #include "syntax/syntax_driver.h"
 
-#include <ctime>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -29,10 +29,15 @@ using preprocess::PPToken;
 
 // Phase 7's records, collected into the vector the parser consumes.  A parser
 // needs random access and unlimited lookahead, which is the one place in the
-// frontend a token vector is the right shape.
+// frontend a token vector is the right shape.  The vector holds spelling ids,
+// so the translation unit's text is stored once in the pool beside it.
 class SyntaxTokenSink : public posttoken::IPostTokenSink
 {
 public:
+	explicit SyntaxTokenSink(SyntaxSpellingPool& spellings)
+		: spellings_(spellings)
+	{}
+
 	void EmitInvalid(const string& source) override
 	{
 		(void)source;
@@ -41,42 +46,24 @@ public:
 
 	void EmitSimple(const string& source, posttoken::ETokenType type) override
 	{
-		SyntaxToken token;
-		token.kind = type;
-		token.spelling = source;
-		tokens_.push_back(token);
+		Push(source, type, kNoLiteralFacts);
 	}
 
 	void EmitIdentifier(const string& source) override
 	{
-		SyntaxToken token;
-		token.kind = kIdentifierToken;
-		token.spelling = source;
-		tokens_.push_back(token);
+		Push(source, kIdentifierToken, kNoLiteralFacts);
 	}
 
 	void EmitLiteral(const string& source, posttoken::EFundamentalType type,
 	                 const string& bytes) override
 	{
-		SyntaxToken token;
-		token.kind = kLiteralToken;
-		token.spelling = source;
-		token.fundamental_type = type;
-		token.count = 1;
-		token.chars = bytes;
-		tokens_.push_back(token);
+		PushLiteral(source, 1, type, bytes);
 	}
 
 	void EmitLiteralArray(const string& source, size_t count,
 	                      posttoken::EFundamentalType type, const string& bytes) override
 	{
-		SyntaxToken token;
-		token.kind = kLiteralToken;
-		token.spelling = source;
-		token.fundamental_type = type;
-		token.count = count;
-		token.chars = bytes;
-		tokens_.push_back(token);
+		PushLiteral(source, count, type, bytes);
 	}
 
 	void EmitUserDefinedCharacter(const string& source, const string& suffix,
@@ -100,10 +87,9 @@ public:
 	{
 		(void)suffix;
 		(void)prefix;
-		SyntaxToken token;
-		token.kind = kLiteralToken;
-		token.spelling = source;
-		tokens_.push_back(token);
+		// A user-defined integer literal's type is its literal operator's, so
+		// the token keeps its spelling and no fundamental type.
+		Push(source, kLiteralToken, kNoLiteralFacts);
 	}
 
 	void EmitUserDefinedFloating(const string& source, const string& suffix,
@@ -111,18 +97,12 @@ public:
 	{
 		(void)suffix;
 		(void)prefix;
-		SyntaxToken token;
-		token.kind = kLiteralToken;
-		token.spelling = source;
-		tokens_.push_back(token);
+		Push(source, kLiteralToken, kNoLiteralFacts);
 	}
 
 	void EmitEof() override
 	{
-		SyntaxToken token;
-		token.kind = kEofToken;
-		token.spelling = "";
-		tokens_.push_back(token);
+		Push("", kEofToken, kNoLiteralFacts);
 	}
 
 	bool invalid() const
@@ -135,8 +115,35 @@ public:
 		return tokens_;
 	}
 
+	const vector<SyntaxLiteralFacts>& literals() const
+	{
+		return literals_;
+	}
+
 private:
+	void Push(const string& source, int kind, int literal)
+	{
+		SyntaxToken token;
+		token.kind = kind;
+		token.spelling = spellings_.Intern(source);
+		token.literal = literal;
+		tokens_.push_back(token);
+	}
+
+	void PushLiteral(const string& source, size_t count,
+	                 posttoken::EFundamentalType type, const string& bytes)
+	{
+		SyntaxLiteralFacts facts;
+		facts.fundamental_type = type;
+		facts.count = count;
+		facts.chars = bytes;
+		literals_.push_back(facts);
+		Push(source, kLiteralToken, static_cast<int>(literals_.size()) - 1);
+	}
+
+	SyntaxSpellingPool& spellings_;
 	vector<SyntaxToken> tokens_;
+	vector<SyntaxLiteralFacts> literals_;
 	bool invalid_ = false;
 };
 
@@ -222,7 +229,8 @@ void EmitAst(const vector<string>& sources, const string& outfile)
 
 	for(size_t index = 0; index < sources.size(); ++index)
 	{
-		SyntaxTokenSink sink;
+		SyntaxSpellingPool spellings;
+		SyntaxTokenSink sink(spellings);
 		posttoken::PostTokenStream tokens(sink);
 		PostTokenBridge bridge(tokens);
 		Preprocessor preprocessor(bridge, build_date, build_time);
@@ -237,7 +245,7 @@ void EmitAst(const vector<string>& sources, const string& outfile)
 
 		out << "start translation unit " << (index + 1) << '\n';
 		SyntaxArena arena;
-		const int root = ParseTranslationUnit(sink.tokens(), arena);
+		const int root = ParseTranslationUnit(sink.tokens(), spellings, arena);
 		arena.Write(out, root);
 		out << "end translation unit\n";
 	}

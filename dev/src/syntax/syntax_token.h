@@ -4,15 +4,21 @@
 // names every keyword, operator and punctuator of the course table.  The three
 // forms that have no `simple` spelling - an identifier, a literal and the end
 // of a translation unit - get pseudo-kinds of their own, so a token is always
-// one small integer plus its spelling.
+// two small integers: what it is, and which spelling in the translation unit's
+// pool it was written with.
 //
 // The spelling is the post-token spelling: the source text of an identifier,
 // and the composed spelling of a literal, which is what the AST dump prints.
+// It is held by id rather than by value, so a repeated spelling is stored once
+// and the parser's token vector is compact; the tokens a translation unit
+// keeps are the ones the parse needs to look ahead over, not the text.
 
 #pragma once
 
 #include <cstddef>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "posttoken/fundamental_type.h"
 #include "posttoken/simple_token.h"
@@ -36,22 +42,63 @@ enum ESyntaxTokenKind
 // `TT_IDENTIFIER`, `TT_LITERAL` or `ST_EOF`.
 const char* SyntaxTokenKindName(int kind);
 
-struct SyntaxToken
+// The spellings one translation unit's tokens share.  Interning happens as the
+// tokens enter the frontend, so a spelling is compared, hashed and stored once
+// per distinct text rather than once per occurrence.
+class SyntaxSpellingPool
 {
-	int kind;
-	std::string spelling;
+public:
+	SyntaxSpellingPool();
 
-	// Literal facts.  `fundamental_type` is set for a literal with a scalar
-	// type, and `chars` holds its bytes; `bytes` counts them, and a count
-	// greater than one marks an array form (string literals).
+	// Interns `text` and returns its id.  Ids are stable for the pool's life,
+	// and id 0 is the empty spelling.
+	int Intern(const std::string& text);
+
+	const std::string& Text(int id) const
+	{
+		return texts_[static_cast<std::size_t>(id)];
+	}
+
+	// The id of `>`, the one spelling the parser synthesizes: the second half
+	// of a `>>` that a close-angle-bracket took the first `>` of.
+	int Greater() const
+	{
+		return greater_;
+	}
+
+private:
+	std::vector<std::string> texts_;
+	std::unordered_map<std::string, int> ids_;
+	int greater_;
+};
+
+// A literal's decoded facts, which later stages evaluate.  They sit beside the
+// token rather than inside it: only a literal token has any, and the parse
+// itself reads none of them.
+struct SyntaxLiteralFacts
+{
 	posttoken::EFundamentalType fundamental_type;
 	std::size_t count;
 	std::string chars;
 
+	SyntaxLiteralFacts()
+		: fundamental_type(posttoken::FT_VOID)
+		, count(0)
+	{}
+};
+
+const int kNoLiteralFacts = -1;
+
+struct SyntaxToken
+{
+	int kind;
+	int spelling;
+	int literal;
+
 	SyntaxToken()
 		: kind(0)
-		, fundamental_type(posttoken::FT_VOID)
-		, count(0)
+		, spelling(0)
+		, literal(kNoLiteralFacts)
 	{}
 };
 

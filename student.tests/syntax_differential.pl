@@ -121,11 +121,38 @@ SRC
 # value, which is when the qualified name stops reading as a type.  What that
 # shape means is not a rule this stage's documents state - a parameter name may
 # not be qualified - so it is recorded rather than matched.
+#
+# The `>>` shapes below are accepted here and rejected by the reference.
+# `pa5.gram` derives them: `close-angle-bracket` is `OP_GT | ST_RSHIFT_1 |
+# ST_RSHIFT_2`, so the two halves of one `>>` close two lists or a list and a
+# relational operator - `f<A<int>>(1)` and `a<b>>c` - and a `template-argument`
+# may be an expression, which is what `f<static_cast<int>(x)>()` needs.  The
+# README says to follow the grammar where it and the reference disagree, so
+# these are recorded rather than matched, and the harness reports if any goes
+# away.
+#
+# `a.operator+<int>(b)` is read here as the call the grammar spells -
+# `template-id: operator-function-id OP_LT template-argument-list?
+# close-angle-bracket` - and by the reference as `((a.operator+) < int) > (b)`.
+# The checked-in fixture covers the unqualified form of the same name, where
+# the two agree.
 my %known_differences = (
 	'qualified-name-in-a-parameter-parens-after-a-value' => <<'SRC',
 class C { };
 int q8(int(C(x)));
 int q6(int(x::C));
+SRC
+	'nested-template-id-closed-by-one-shift-token' => <<'SRC',
+void f() { int q = f<A<int>>(1); }
+SRC
+	'cast-as-a-template-argument' => <<'SRC',
+void f() { int q = f<static_cast<int>(x)>(); }
+SRC
+	'shift-token-as-a-relational-operator' => <<'SRC',
+void f() { x = a<b>>c; }
+SRC
+	'operator-template-id-after-a-dot' => <<'SRC',
+void f() { a.operator+<int>(b); }
 SRC
 );
 
