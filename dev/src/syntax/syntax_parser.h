@@ -120,6 +120,7 @@ private:
 	int TemplateParameterClause();
 	void TemplateParameterList(int parent);
 	int TemplateParameter();
+	int NonTypeTemplateParameter();
 	void EnterAngle();
 	void LeaveAngle();
 	void CloseAngle();

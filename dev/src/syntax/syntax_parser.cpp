@@ -1243,6 +1243,9 @@ int Parser::TemplateParameter()
 {
 	if(At(posttoken::KW_CLASS) || At(posttoken::KW_TYPENAME))
 	{
+		// `typename name` is a type parameter, but `typename name<...>::type`
+		// or `typename name::type` names a type in a non-type parameter.
+		const Mark mark = Take();
 		const int node = Tag("type-parameter");
 		Add(node, Terminal("parameter-key", Current()));
 		Advance();
@@ -1250,11 +1253,16 @@ int Parser::TemplateParameter()
 		{
 			Add(node, Named("parameter-pack", "..."));
 		}
-		if(At(kIdentifierToken))
+		if(At(kIdentifierToken) && !AtAny(posttoken::OP_LT, posttoken::OP_COLON2, 1))
 		{
 			Bind(Spelling(), kNameType);
 			Add(node, Named("identifier", Spelling()));
 			Advance();
+		}
+		else if(At(kIdentifierToken) || At(posttoken::OP_COLON2))
+		{
+			Rollback(mark);
+			return NonTypeTemplateParameter();
 		}
 		if(Accept(posttoken::OP_ASS))
 		{
@@ -1289,6 +1297,11 @@ int Parser::TemplateParameter()
 		return node;
 	}
 
+	return NonTypeTemplateParameter();
+}
+
+int Parser::NonTypeTemplateParameter()
+{
 	const int node = Tag("non-type-template-parameter");
 	bool saw_type = false;
 	bool saw_typedef = false;
@@ -2744,8 +2757,14 @@ void Parser::CloseAngle()
 		rshift_split_ = true;
 		return;
 	}
-	Expect(posttoken::OP_GT, "`>`");
+	if(!At(posttoken::OP_GT))
+	{
+		throw SyntaxError("expected `>` at token " + to_string(pos_) + " (`" + Spelling() +
+		                  "`)");
+	}
+	Advance();
 }
+
 
 bool Parser::TryTemplateIdTail(bool speculative)
 {
