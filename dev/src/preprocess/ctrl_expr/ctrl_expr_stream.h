@@ -61,7 +61,8 @@ public:
 	void EmitEof();
 
 	// The logical line ended: print its result, or print nothing at all when
-	// the line carried no token.
+	// the line was blank.  A line whose only token was rejected still prints
+	// `error`, which is why the empty buffer and the flag are separate.
 	void EndOfLine();
 
 	// Writes the output block to the stream.
@@ -79,8 +80,9 @@ private:
 	std::ostream& out_;
 	std::vector<CtrlToken> tokens_;
 	std::string buffer_;
-	// A token of this line makes the whole line `error` whatever the grammar
-	// says: an invalid token, a literal that is not an `integral-literal`.
+	// The line's emit-time rejection rules already failed, so it is `error`
+	// whatever the rest of it parses as: an invalid token, a user-defined
+	// literal, or a literal that is not an `integral-literal`.
 	bool rejected_;
 };
 

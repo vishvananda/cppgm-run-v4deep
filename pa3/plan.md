@@ -6,7 +6,9 @@
   entry, before stage edits).
 - Last reviewed commit: `2b52b6e3306f9748c62914e64eec99d6317c9156`.
 - Implementation commits: `16f7d2a4` (the evaluator), `02cd7532` (F1, F2),
-  `93de55c2` (F3 and the nesting bound).
+  `93de55c2` (F3 and the nesting bound). Cleanups: `3894d18b`, `058b4a1f`,
+  `b8184ea6`. This document is the consolidated plan and audit record for `pa3`;
+  the commit that last touched it is the one that wrote this record.
 - Target: `ppexpr` evaluates one controlling expression per logical source line
   and prints the result, `error`, or nothing for an empty line, then `eof`.
 
@@ -59,7 +61,8 @@ template traced from source to ELF. PA3 has no declaration, template or object,
 so the trace is the whole surface this stage owns: the path a controlling
 expression's worst case takes.
 
-`1 ? defined (a"b) : -9223372036854775807 - 1` on one logical line:
+`1 ? defined (a) : -9223372036854775807 - 1` on one logical line, followed by
+one whose only token is invalid and one that is blank:
 
 1. `ReadStandardInput` fills one buffer in 64 KiB blocks and moves it into
    `TranslatedSource`, which is its single owner. Phase 1/2 rewriting stays
@@ -82,7 +85,9 @@ expression's worst case takes.
    and typed but not evaluated, so the `-9223372036854775807 - 1` in the arm
    that is not chosen neither overflows nor is skipped in the type computation.
 6. The result is appended to the sink's output block, which is written to the
-   stream in 64 KiB pieces.
+   stream in 64 KiB pieces. A line whose only token is invalid (`#`) reaches
+   step 5 with an empty buffer and a set rejection flag and prints `error`; a
+   blank line reaches it with both clear and prints nothing.
 
 Each preprocessing-token is classified exactly once, each line's tokens are
 parsed exactly once, and there is no text roundtrip, no retry and no per-token
@@ -181,7 +186,7 @@ nothing bounded it, so the usable depth was a property of `ulimit -s` and the
 failure was a SIGSEGV that lost the whole run's output:
 
 ```sh
-perl -e 'print "(" x 20000, 1, ")" x 20000, "\n"' | dev/ppexpr   # before: exit 139
+perl -e 'print "(" x 20000, 1, ")" x 20000, "\n"' | dev/ppexpr   # before: no output at all
 ```
 
 Measured before the fix: 6 000 nested parentheses evaluated, 8 000 died. After
@@ -220,10 +225,13 @@ rather than claimed.
   tool in the tree that answers an unknown argument with
   `ERROR: invalid usage`, so the flag is compared against this tool's own plain
   run rather than against the reference.
-- **A `%`/`/` by zero, and every other course-defined value error, in a dead
-  arm.** `true?5:5/0` is `5` and `0&&(5<<64)` is `0` in both tools; the handout
-  makes these errors of *evaluation*, not of the line. Confirmed by probe on
-  all four short-circuit/conditional shapes before the laziness was written.
+- **A course-defined value error in a dead arm.** `true?5:5/0` is `5` and
+  `0&&(5<<64)` is `0` in both tools; the handout makes these errors of
+  *evaluation*, not of the line. The checked-in `250-eval-order` fixes all four
+  shapes (`?:`, `&&` and `||` in both directions) and `260-cond-ret-type` fixes
+  a dead arm's type, and the same liveness is what makes F2's
+  `9223372036854775807 + 1` a value rather than an error when it stands in an
+  arm the condition did not choose (probed on all four shapes after F2).
 - **A rejection anywhere on the line rejects the line.** The handout's
   "check that there are no `invalid` tokens and that all `literal` tokens are
   of `integral-literal` type" is a property of the token sequence, not of the
@@ -232,14 +240,17 @@ rather than claimed.
   is the same rule without a second pass.
 - **A line that carries only a comment or whitespace produces no output line**,
   which is why `CtrlExprSink::EndOfLine` distinguishes an empty token buffer
-  from a rejected one: `-132\n` and `/* blank */\n` print nothing, but a line
-  whose only token is invalid (`#`, `@`) prints `error`.
+  from a rejected one: an empty line and `/* blank */\n` print nothing, but a
+  line whose only token is invalid (`#`, `@`) prints `error`.
 - **`9223372036854775808` is `invalid` rather than a value.** That is 2.14.2's
   decimal rule (a decimal literal with no suffix has only signed candidate
   types) and it arrives from the inherited PA2 classifier, unchanged.
 - **Phase 1-3 failures exit `EXIT_FAILURE`**, as `pptoken` does; the line output
-  already written is informational then. Verified against the reference for an
-  unterminated quote, an unterminated raw string and a malformed UCN.
+  already written is informational then, and the stage keeps that behaviour
+  because it is `pptoken`'s. The sweep's one-per-file list compares the exit
+  status of both tools over an unterminated character literal and string
+  literal, an unterminated raw string, a line splice, a malformed UCN, `%:` and
+  `??/`.
 - **Self-containment.** No `system`/`popen`/`exec`, no reference-binary
   invocation and no fixture-name recognition anywhere in the stage.
 
@@ -281,30 +292,32 @@ definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
   absolute difference 0.0023 s, worst excursion 0.0364 s, and 0 of 5 A/A blocks
   reached the measured A/B effect. The A/B difference is about 10 times the
   worst excursion the reference produced against itself.
-- Marginal cost of this stage: the same corpus through the stage-base PA2
-  `posttoken` frontend takes 0.70 s (median of 7; 20.05 MB) against this stage's
-  0.68 s (median of 7; 20.04 MB), so the controlling-expression evaluation adds
-  no measurable latency or memory above the phases 1-7 frontend it is built on.
-  The comparison is a like-for-like tool-to-tool reading, not a controlled
-  ablation: `posttoken` writes one line per token where this tool writes one per
-  logical line, so the reported difference bounds the stage's added work from
-  above rather than isolating it.
+- Marginal cost of this stage: the same corpus, read by the three tools in one
+  interleaved loop (medians of 7; `dev/ppexpr` 0.62 s / 19.59 MB, the reference
+  0.98 s / 18.57 MB, the stage-base PA2 `posttoken` 0.70 s / 19.59 MB). The
+  controlling-expression evaluation therefore adds no measurable latency or
+  memory above the phases 1-7 frontend it is built on, and the two readings
+  agree with the ABBA table. The comparison is a like-for-like tool-to-tool
+  reading, not a controlled ablation: `posttoken` writes one line per token
+  where this tool writes one per logical line, so the reported difference
+  bounds the stage's added work from above rather than isolating it.
 - The F3 collapse is the one change made *for* performance, and it is on this
   table: the same corpus and schedule read 0.6815 s before it and 0.6268 s
   after, against a 0.0023 s noise floor. Nothing else here depends on added
   compiler work, so there is no other profitability budget to justify.
-- Peak RSS: the stage reads ~1.0 MB / +6% over the reference on this corpus,
-  and the delta scales with the source: 0.5 MB / 1.0 MB / 2.0 MB on 10.7 MB /
-  21.3 MB / 42.7 MB of input, i.e. O(n) with a slope of ~0.1 bytes per source
-  byte. It is the input buffer's geometric-growth slack, not the stage: the
-  stage-base `posttoken`, which shares the read path, reports 20.05 MB to this
-  stage's 20.04 MB on the same corpus. PA2 measured the alternative at the read
-  site and rejected it (reserving the file length raised peak RSS on a 12.5 MB
-  source from 20.1 MB to 27.9 MB), so this is an inherited cost with a recorded
-  reason, and the bound below is a **self-selected diagnostic target, not a
-  mandated limit**. The spec's requirement is that the addition be reported and
-  stay bounded; it is, and it is bounded by a quantity proportional to the
-  source, which is what §9 asks preprocessing to be.
+- Peak RSS: the stage reads 1.2 MB / +6% over the reference on this corpus, and
+  the delta grows with the source - 1 208 KB / 2 056 KB / 4 056 KB on
+  10 669 643 / 21 339 286 / 42 678 572 bytes of input, i.e. O(n) with a slope of
+  ~0.12 bytes of RSS per source byte. It is the input buffer's
+  geometric-growth slack, not the stage: the stage-base `posttoken`, which
+  shares the read path, reads 19.59 MB to this stage's 19.59 MB on the same
+  corpus. PA2 measured the alternative at the read site and rejected it
+  (reserving the file length raised peak RSS on a 12.5 MB source from 20.1 MB
+  to 27.9 MB), so this is an inherited cost with a recorded reason, and the
+  comparison is a **self-selected diagnostic target, not a mandated limit**. The
+  spec's requirement is that the addition be reported and stay bounded; it is,
+  and it is bounded by a quantity proportional to the source, which is what §9
+  asks preprocessing to be.
 
 ## Validation
 
@@ -328,15 +341,16 @@ definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
   operands, the conditional's condition/arm matrix, the `defined` forms over 21
   operands, seven white-space/comment separators, and every rejected token kind
   planted at ten skeleton positions. Candidates are packed one per line into
-  400-line chunks, so the sweep costs ~480 process pairs rather than one per
+  400-line chunks, so the sweep costs ~950 process runs rather than one per
   candidate; each chunk asserts that neither tool failed a translation phase and
   that the output has one line per candidate, and a differing chunk is then
   reduced line by line. **0 differing candidates** on the final revision.
-- Independent adversarial probing beyond both harnesses: nesting to 2 000 000
-  (the bound, F3), 200 000 chained prefix operators, 20 000-term operator
-  chains, `defined` with a comment between the operator and its operand, a NUL
-  byte and a stray `;` inside an expression, splices inside a logical line, and
-  the phase 1-3 failures. All agree except the bounded nesting class.
+- Independent adversarial probing beyond both harnesses: nesting to 2 000 000,
+  which is what showed the reference has no bound at all (F3); 200 000 chained
+  prefix operators; 20 000-term operator chains; `defined` with a comment
+  between the operator and its operand; a NUL byte and a stray `;` inside an
+  expression; splices inside a logical line; and the phase 1-3 failures. All
+  agree except the bounded nesting class.
 
 ## Handoff ledger
 
@@ -387,7 +401,9 @@ definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
     construction; the measurement and the rejected alternative are recorded at
     the read site in `dev/posttoken.cpp` and in the PA2 ledger. A later stage
     that changes the read path changes all three tools at once.
-  - **The shared benchmark statistic.** `student.tests/pptoken_benchmark.pl` and
-    `student.tests/posttoken_benchmark.pl` use the same robust noise floor this
-    stage's benchmark does, so no rewriting is pending; PA1's recorded numbers
-    predate it and are noted in the PA2 ledger.
+  - **The shared benchmark statistic.** `student.tests/posttoken_benchmark.pl`
+    and this stage's benchmark use the robust median-absolute-difference noise
+    floor; `student.tests/pptoken_benchmark.pl` still uses the A/A `max - min`
+    range, which is the fragile statistic the PA2 ledger's A4 records. It is the
+    same inherited item PA2 left open, still open, and it is not this stage's to
+    close: nothing here depends on PA1's number.
