@@ -12,7 +12,7 @@
   for each primary source, parses each translation unit with the PA5 syntax
   subset, and writes the deterministic AST dump the checked-in `.ref` files
   define.
-- Progress: **185 / 188** checked-in PA5 tests pass, up from 0 / 188 at the
+- Progress: **186 / 188** checked-in PA5 tests pass, up from 0 / 188 at the
   turn's start.  `make test-report-through-pa4` passes 205 / 205 and
   `perl scripts/cppgm_file_audit.pl --stage pa5 --paths dev/src` reports no
   issue.
@@ -58,29 +58,27 @@ would change tokenization, which is why `C::operator=` has no space and
 
 ## Remaining groups
 
-Three fixtures fail, each a corner of the ambiguity machinery rather than a
+Two fixtures fail, each a corner of the ambiguity machinery rather than a
 missing construct:
 
-1. `200-qualified-member-comparison-template-arg` - a `>` inside a *base
-   clause*'s template-argument list (`integral_constant<bool, R1::num <
-   R2::num>`) is read as a relational operator, so the class-specifier ends
-   before its body.  The angle guard is correct for an argument list entered
-   from an expression, but the argument here is entered from a type position
-   and the nested speculation for `R1::num<...>` leaves the guard's delimiter
-   count wrong on failure.  The reducer is a two-line template class with a
-   template-id base clause.
-2. `200-forward-unknown-nested-template-in-ctor-body` - `typedef pointer<Y*,
-   forward_delete<T, Y>, alloc_t> block_t;` inside a member function body.  A
-   name no declaration has bound, followed directly by `<`, must be read as a
-   template-id in a *declaration* position as well as in a template argument;
-   the two-line reducer `void f() { typedef pointer<Y*> block_t; }` isolates it,
-   and an attempt at the rule is recorded below rather than committed.
-3. `200-parenthesized-parameter-name-or-type` - N3485 8.2's
+1. `200-qualified-member-comparison-template-arg` - a class head with a
+   template-id base clause whose argument ends in a comparison,
+   `struct ratio_less<R1, R2, true, false> : integral_constant<bool, R1::num <
+   R2::num> {};`.  The reference reads the argument as the template-id
+   `R1::num<R2::num>` and then closes the base clause's list with the second
+   `>`; this parser loses the class body to a failed nested template-id
+   speculation.  Reducer: `template<class T, T V> struct ic {}; template<class
+   R1> struct B : ic<bool, R1::num < 2> {};`.
+2. `200-parenthesized-parameter-name-or-type` - N3485 8.2's
    `int f(int(value_type))` choice between a parenthesized parameter name and a
    parameter of function type.  `parsing.md` states the rule (the name category
-   decides); the implementation still prefers the named reading, and the shapes
-   the reference produces for `int f(int(int))` differ from `int
-   f(int(value_type))` in a way the clause alone does not explain.
+   decides) and the category half is clear, but the shapes the reference
+   produces differ in a way the clause does not explain: `int(int)` and
+   `int(...)` print `abstract-declarator`, while `int(value_type)` and
+   `int(CC)` print `declarator` with the same child.  Matching that needs a
+   rename keyed on the *contents* of the sibling parameter clause, which is a
+   reference artifact rather than a rule; it is recorded as a review question
+   below instead of being special-cased.
 
 Earlier groups that this turn finished: the token plumbing and arena; simple
 declarations, declarators and type-ids; namespaces, classes, enums and
@@ -127,30 +125,26 @@ telemetry surface is invented to report one.
 ## Validation
 
 - `make test-report-through-pa4` - 205 / 205.
-- `make test-pa5` - 185 / 188 (the three fixtures in "Remaining groups").
+- `make test-pa5` - 186 / 188 (the two fixtures in "Remaining groups").
 - `perl scripts/cppgm_file_audit.pl --stage pa5 --paths dev/src` - pass, no
   warnings (60 files checked).
 - `student.tests/syntax_benchmark.pl` - dumps byte-identical to the reference;
   latency and peak RSS reported above.
-- Whole-suite runs after each group above; the three remaining failures were
+- Whole-suite runs after each group above; the two remaining failures were
   reduced to two- to six-line reproducers before being recorded here.
 
 ## Handoff ledger
 
 ### Unfinished implementation
 
-- The three fixture groups in "Remaining groups".  Each is an ambiguity corner
-  with a recorded reducer; none is a missing construct.  Groups 1 and 2 need
-  the same missing piece of machinery: a nested template-id speculation that
-  restores the angle and delimiter state exactly when it fails, so that a `>`
-  inside a *type* position's argument list is not read as a relational operator
-  and a name followed by `<` in a declaration is read as a template-id.  A rule
-  for group 2 was implemented and measured this turn: it fixed the reducer
-  `typedef pointer<Y*> block_t;` but left the fixture failing while breaking
-  `200-inline-namespace-template-visibility-base`, so it was reverted rather
-  than committed.  Group 3 needs the parameter's parenthesized-name-vs-type
+- The two fixture groups in "Remaining groups".  Each is an ambiguity corner
+  with a recorded reducer; neither is a missing construct.  Group 1 is a nested
+  template-id speculation inside a *base clause* that does not restore the
+  angle state when it fails, so the class body is lost; the reducer above is
+  the whole of it.  Group 2 needs the parameter's parenthesized-name-vs-type
   choice, which `parsing.md` states and which the current
-  `ParameterLikeDeclarator` does not implement.
+  `ParameterLikeDeclarator` does not implement; the shape half of it is a
+  review question, not an implementation gap.
 - Whole-stage audit: not run yet.  Nothing here is waived; the failures are
   listed for the independent audit that follows this handoff.
 
@@ -168,6 +162,13 @@ telemetry surface is invented to report one.
 
 ### Independent review questions
 
+- The dump spells a non-type template parameter's bare default literal as
+  `TT_LITERAL:0` when the parameter is one keyword type specifier with no
+  declarator, and as `literal 0` otherwise.  The rule matches every case the
+  reference was probed on (`int = 0`, `int N = 0`, `unsigned long = 0`,
+  `enable_if<...>::type = 0`, `__enable_if_t<...> = 0`, `class T, int = 0`), but
+  it is a dump-spelling artifact of the reference's parse paths, not a rule any
+  document states, so it is recorded here as a checked-but-unexplained choice.
 - The `sizeof`/`typeid` operand choice (`sizeof(S())` is the expression reading
   and `sizeof(int())` the type-id reading) is implemented as an empirical rule
   derived from the reference's behaviour on probes, not from a clause: N3485
