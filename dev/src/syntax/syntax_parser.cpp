@@ -546,16 +546,19 @@ int Parser::SkipAttributes()
 			int depth = 1;
 			while(depth > 0 && !AtEof())
 			{
-				if(At(posttoken::OP_LSQUARE) && At(posttoken::OP_RSQUARE, 1))
+				if(At(posttoken::OP_LSQUARE) && At(posttoken::OP_LSQUARE, 1))
+				{
+					Advance();
+					Advance();
+					++depth;
+					continue;
+				}
+				if(At(posttoken::OP_RSQUARE) && At(posttoken::OP_RSQUARE, 1))
 				{
 					Advance();
 					Advance();
 					--depth;
 					continue;
-				}
-				if(At(posttoken::OP_RSQUARE))
-				{
-					--depth;
 				}
 				Advance();
 			}
@@ -1292,9 +1295,10 @@ int Parser::BaseClause()
 		bool seen = false;
 		QualifiedTypeName(seen, false);
 		Add(specifier, Named("base-name", JoinedText(start, EndPosition())));
-		if(Accept(posttoken::OP_DOTS))
+		if(At(posttoken::OP_DOTS))
 		{
-			Add(specifier, Named("ellipsis", "..."));
+			Add(specifier, Terminal("pack-expansion", Current()));
+			Advance();
 		}
 		Add(node, specifier);
 		if(!Accept(posttoken::OP_COMMA))
@@ -1472,69 +1476,58 @@ bool Parser::StartsSpecialMember()
 // constructor, a destructor, an operator function or a conversion function.
 int Parser::SpecialMemberName()
 {
-	if(At(kIdentifierToken))
+	// A qualified name first: `C::C`, `C::~C`, `C::operator int` and the
+	// operator forms.  The name after the specifier is a constructor only when
+	// it repeats the last component of that specifier.
+	const Mark mark = Take();
+	const size_t start = Position();
+	bool present = false;
+	const string component = NestedNameSpecifier(present);
+	if(present)
 	{
-		if(!classes_.empty() && Spelling() == classes_.back())
+		bool member = false;
+		int node = kNoSyntaxNode;
+		if(At(posttoken::KW_OPERATOR))
 		{
-			const int node = Named("identifier", Spelling());
-			Advance();
-			return node;
+			node = UnqualifiedId("identifier");
+			member = true;
 		}
-		const Mark mark = Take();
-		const size_t start = Position();
-		bool seen = false;
-		const string component = NestedNameSpecifier(seen);
-		if(seen && At(posttoken::KW_OPERATOR))
-		{
-			// A qualified operator or conversion function: `C::operator int`.
-			UnqualifiedId("identifier");
-			if(At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS))
-			{
-				return Named("identifier", JoinedText(start, EndPosition()));
-			}
-		}
-		if(seen && At(kIdentifierToken) && Spelling() == component)
+		else if(At(posttoken::OP_COMPL))
 		{
 			Advance();
-			if(At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS))
-			{
-				return Named("identifier", JoinedText(start, EndPosition()));
-			}
+			Expect(kIdentifierToken, "a destructor name");
+			member = true;
 		}
-		Rollback(mark);
+		else if(At(kIdentifierToken) && Spelling() == component)
+		{
+			node = Named("identifier", Spelling());
+			Advance();
+			member = true;
+		}
+		if(member && (At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS)))
+		{
+			(void)node;
+			return Named("identifier", JoinedText(start, EndPosition()));
+		}
 	}
-	if(At(posttoken::OP_COMPL))
+	Rollback(mark);
+
+	if(!classes_.empty() && At(kIdentifierToken) && Spelling() == classes_.back())
 	{
-		const Mark mark = Take();
-		const size_t start = Position();
-		bool seen = false;
-		const string component = NestedNameSpecifier(seen);
-		if(At(posttoken::OP_COMPL))
-		{
-			Advance();
-			if(At(kIdentifierToken))
-			{
-				const string name = Spelling();
-				Advance();
-				if(At(posttoken::OP_LPAREN) || At(posttoken::OP_ASS))
-				{
-					if(seen)
-					{
-						return Named("identifier", JoinedText(start, EndPosition()));
-					}
-					return Named("identifier", "~" + name);
-				}
-			}
-		}
-		Rollback(mark);
-		Expect(posttoken::OP_COMPL, "`~`");
-		const string name = Spelling();
-		Expect(kIdentifierToken, "a destructor name");
-		return Named("identifier", "~" + name);
+		const int node = Named("identifier", Spelling());
+		Advance();
+		return node;
 	}
 	if(At(posttoken::KW_OPERATOR))
 	{
 		return UnqualifiedId("identifier");
+	}
+	if(At(posttoken::OP_COMPL))
+	{
+		Advance();
+		const string name = Spelling();
+		Expect(kIdentifierToken, "a destructor name");
+		return Named("identifier", "~" + name);
 	}
 	throw SyntaxError("expected a special member name");
 }
@@ -1664,6 +1657,11 @@ int Parser::CtorInitializer()
 			}
 			Expect(posttoken::OP_RPAREN, "`)`");
 			Add(initializer, paren);
+		}
+		if(At(posttoken::OP_DOTS))
+		{
+			Add(initializer, Terminal("pack-expansion", Current()));
+			Advance();
 		}
 		Add(node, initializer);
 		if(!Accept(posttoken::OP_COMMA))
@@ -2320,11 +2318,13 @@ int Parser::QualifiedTypeName(bool& seen, bool require_type)
 
 int Parser::DecltypeSpecifier()
 {
+	const size_t start = Position();
 	const int node = Tag("decltype-specifier");
 	Expect(posttoken::KW_DECLTYPE, "`decltype`");
 	Expect(posttoken::OP_LPAREN, "`(`");
 	Add(node, Expression());
 	Expect(posttoken::OP_RPAREN, "`)`");
+	arena_.SetLabel(node, JoinedText(start, EndPosition()));
 	return node;
 }
 
