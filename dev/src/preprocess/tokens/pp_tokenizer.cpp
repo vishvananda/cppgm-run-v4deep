@@ -122,12 +122,18 @@ bool IsSimpleEscape(int code_point)
 	}
 }
 
-// 2.14.5: the characters a raw string delimiter may not contain.
+// 2.14.5: the characters a raw string delimiter may not contain.  `d-char` is
+// "any member of the basic source character set except: space, the left
+// parenthesis (, the right parenthesis ), the backslash \, and the control
+// characters representing horizontal tab, vertical tab, form feed, and
+// newline" - a double quote is *not* excluded, so `R"a"b(x)a"b"` is one
+// literal whose delimiter is `a"b`.  The closing scan looks for `)delim"`, so
+// a delimiter that contains a quote still terminates correctly.
 bool IsRawDelimiterCodePoint(int code_point)
 {
 	switch (code_point)
 	{
-	case ' ': case '(': case ')': case '\\': case '"':
+	case ' ': case '(': case ')': case '\\':
 	case '\t': case '\v': case '\f': case '\n':
 		return false;
 	default:
@@ -614,7 +620,14 @@ bool PPTokenizer::HasHexQuad(std::size_t ahead, std::size_t count) const
 void PPTokenizer::SkipEscapeSequence()
 {
 	int next = CodeAt(1);
-	if (IsSimpleEscape(next))
+	// A NUL byte after the backslash is accepted here and refused at phase 7,
+	// which reports the literal as `invalid`.  That is the reference's
+	// implementation-defined reading of a physical source character outside
+	// the basic source character set (2.2/1.1 leaves the mapping to the
+	// implementation): `"\<NUL>"` is one string-literal preprocessing-token
+	// there, while `"\p"` is a phase 3 error in both frontends.  A NUL
+	// anywhere else is an ordinary character for both.
+	if (next == 0 || IsSimpleEscape(next))
 	{
 		Consume(2);
 		return;
@@ -757,6 +770,7 @@ void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 	std::size_t cursor = quote_byte + 1;
 	std::size_t delimiter_begin = cursor;
 	std::size_t delimiter_length = 0;
+	std::size_t delimiter_bytes = 0;
 	for (;;)
 	{
 		int code_point = 0;
@@ -770,6 +784,7 @@ void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 		++delimiter_length;
 		if (delimiter_length > kMaxRawDelimiterLength)
 			throw SourceError("raw string delimiter is too long");
+		delimiter_bytes += next - cursor;
 		cursor = next;
 	}
 	std::string delimiter = buffer.substr(delimiter_begin, cursor - delimiter_begin);
@@ -805,6 +820,30 @@ void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 		at = body_next;
 	}
 	source_.ResumeAt(cursor);
+
+	// 2.14.5 limits a `d-char-sequence` to 16 characters, and the reference
+	// keeps two counts of it: more than 16 code points is the "too long" error
+	// above, while a delimiter that is at most 16 code points but more than 16
+	// bytes is reported as one non-whitespace character covering the whole
+	// raw-string source, ud-suffix included, rather than as a literal.  The two
+	// only differ for a `d-char` outside the basic source character set, which
+	// 2.14.5 excludes outright, so neither frontend's reading of an ill-formed
+	// delimiter is the standard's; the reference defines the accepted
+	// extension and this reproduces it.  `R"<é x 9>(y)<é x 9>"` is the
+	// smallest case: 9 code points, 18 bytes.
+	if (delimiter_bytes > kMaxRawDelimiterLength)
+	{
+		if (IsIdentifierStart(CodeAt(0)))
+		{
+			Consume(1);
+			while (IsIdentifierBody(CodeAt(0)))
+				Consume(1);
+		}
+		ReportLocation();
+		output_.emit_non_whitespace_char(spelling_);
+		NoteEmitted(role_other);
+		return;
+	}
 
 	if (IsIdentifierStart(CodeAt(0)))
 	{
