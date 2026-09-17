@@ -79,6 +79,24 @@ void AppendDecimal(std::string& out, unsigned long long value)
 		out.push_back(digits[--count]);
 }
 
+// A signed `+`, `-` or `*` whose mathematical value is not representable in
+// `intmax_t` is an error, and an unsigned one wraps.  The builtins give each
+// operator that definition directly, so this code never relies on signed
+// overflow of its own.
+bool SignedOverflow(CtrlExpression::EBinOp op, long long left, long long right,
+                    long long& result)
+{
+	switch (op)
+	{
+	case CtrlExpression::BIN_ADD:
+		return __builtin_add_overflow(left, right, &result);
+	case CtrlExpression::BIN_SUB:
+		return __builtin_sub_overflow(left, right, &result);
+	default:
+		return __builtin_mul_overflow(left, right, &result);
+	}
+}
+
 void AppendSigned(std::string& out, unsigned long long bits)
 {
 	const long long value = static_cast<long long>(bits);
@@ -330,13 +348,25 @@ bool CtrlExpression::ParseUnary(bool live, Value& out)
 			return ParseUnary(live, out);
 
 		case posttoken::OP_MINUS:
-			// The promoted type is unchanged; the value wraps for an unsigned
-			// operand, which is what the 64-bit image does naturally.
+		{
+			// The promoted type is unchanged.  An unsigned operand wraps,
+			// which the 64-bit image does by itself; negating the most
+			// negative signed value has no representation and is an error,
+			// the same way a signed `+`, `-` or `*` that overflows is.
 			Consume();
 			if (!ParseUnary(live, out))
 				return false;
+			if (live && !out.is_unsigned)
+			{
+				long long result;
+				if (__builtin_sub_overflow(0LL, static_cast<long long>(out.bits), &result))
+					return false;
+				out.bits = static_cast<unsigned long long>(result);
+				return true;
+			}
 			out.bits = 0ull - out.bits;
 			return true;
+		}
 
 		case posttoken::OP_COMPL:
 			Consume();
@@ -474,7 +504,14 @@ bool CtrlExpression::ApplyBinary(EBinOp op, bool live, const Value& lhs, const V
 	// common type is unsigned when either operand's is, and both are 64 bits,
 	// so the conversion is the identity on the 64-bit image.
 	const bool is_unsigned = lhs.is_unsigned || rhs.is_unsigned;
-	out.is_unsigned = is_unsigned;
+
+	// 5.9 and 5.10: a relational or equality operator yields `bool`, so its
+	// result is signed `intmax_t` whatever the operands' common type was.  The
+	// result's type is set before the dead-branch return, because a `?:` arm
+	// that is not evaluated is still typed.
+	const bool yields_bool = op == BIN_LT || op == BIN_GT || op == BIN_LE ||
+	                         op == BIN_GE || op == BIN_EQ || op == BIN_NE;
+	out.is_unsigned = yields_bool ? false : is_unsigned;
 	out.bits = 0;
 	if (!live)
 		return true;
@@ -482,13 +519,30 @@ bool CtrlExpression::ApplyBinary(EBinOp op, bool live, const Value& lhs, const V
 	switch (op)
 	{
 	case BIN_ADD:
-		out.bits = lhs.bits + rhs.bits;
-		return true;
 	case BIN_SUB:
-		out.bits = lhs.bits - rhs.bits;
-		return true;
 	case BIN_MUL:
-		out.bits = lhs.bits * rhs.bits;
+		// An unsigned result wraps modulo 2^64, which the 64-bit images do by
+		// themselves.  A signed one that overflows has no result at all, so the
+		// course definition makes it an error - the same treatment `500`'s
+		// `(1 << 63)/-1` gets.  Shifts are exempt: `1 << 63` is the most
+		// negative value, not an error.
+		if (!is_unsigned)
+		{
+			long long result;
+			if (SignedOverflow(op, static_cast<long long>(lhs.bits),
+			                   static_cast<long long>(rhs.bits), result))
+			{
+				return false;
+			}
+			out.bits = static_cast<unsigned long long>(result);
+			return true;
+		}
+		if (op == BIN_ADD)
+			out.bits = lhs.bits + rhs.bits;
+		else if (op == BIN_SUB)
+			out.bits = lhs.bits - rhs.bits;
+		else
+			out.bits = lhs.bits * rhs.bits;
 		return true;
 
 	case BIN_DIV:
@@ -536,9 +590,7 @@ bool CtrlExpression::ApplyBinary(EBinOp op, bool live, const Value& lhs, const V
 			         op == BIN_LE ? left <= right :
 			                        left >= right;
 		}
-		// 5.9: the result is `bool`, so it is signed `intmax_t`.
 		out.bits = result ? 1 : 0;
-		out.is_unsigned = false;
 		return true;
 	}
 
@@ -549,7 +601,6 @@ bool CtrlExpression::ApplyBinary(EBinOp op, bool live, const Value& lhs, const V
 		// to it is the identity on the image either way.
 		const bool equal = lhs.bits == rhs.bits;
 		out.bits = (op == BIN_EQ ? equal : !equal) ? 1 : 0;
-		out.is_unsigned = false;
 		return true;
 	}
 
