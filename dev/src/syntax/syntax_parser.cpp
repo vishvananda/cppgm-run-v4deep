@@ -409,6 +409,7 @@ Parser::Mark Parser::Take() const
 	Mark mark;
 	mark.pos = pos_;
 	mark.rshift = rshift_split_;
+	mark.delim = nested_delim_;
 	mark.nodes = arena_.NodeCount();
 	mark.scopes = scopes_.size();
 	mark.bindings = bindings_.size();
@@ -420,6 +421,10 @@ void Parser::Rollback(const Mark& mark)
 {
 	pos_ = mark.pos;
 	rshift_split_ = mark.rshift;
+	// A half-read parenthesized construct leaves the delimiter count raised,
+	// and a `>` inside an angle list is an operator or the list's closer by
+	// that count alone, so the checkpoint carries it too.
+	nested_delim_ = mark.delim;
 	arena_.DropTo(mark.nodes);
 	while(scopes_.size() > mark.scopes)
 	{
@@ -1229,9 +1234,34 @@ int Parser::TemplateDeclaration()
 	const int node = Tag("template-declaration");
 	Expect(posttoken::KW_TEMPLATE, "`template`");
 	PushScope();
+	const size_t scope = scopes_.size() - 1;
 	Add(node, TemplateParameterClause());
+	const size_t parameters = bindings_.size();
 	Add(node, Declaration());
+	// The parameters are visible to the declaration alone, but a class or
+	// alias template's name is a type name of the enclosing scope, and it
+	// names a template there (N3485 14.2/2): `template<class T> struct B;`
+	// is what makes `B<int>` a template-id in the declarations that follow,
+	// and `B * p;` a declaration.  It is the first name the declaration bound
+	// in this scope, because a declaration binds its own name before the body
+	// or the members that follow it; the parameters bind before the
+	// declaration is read, so the search starts where they end.  A function
+	// template's name is not a type name, so it takes no category here.
+	string entity;
+	for(size_t index = parameters; index < bindings_.size(); ++index)
+	{
+		if(bindings_[index].scope == scope)
+		{
+			entity = bindings_[index].name;
+			break;
+		}
+	}
+	const bool names_type = !entity.empty() && Lookup(entity) == kNameType;
 	PopScope();
+	if(names_type)
+	{
+		Bind(entity, kNameTemplate);
+	}
 	return node;
 }
 

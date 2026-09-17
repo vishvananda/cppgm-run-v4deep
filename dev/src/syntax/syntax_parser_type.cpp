@@ -291,9 +291,17 @@ int Parser::QualifiedTypeName(bool& seen, bool require_type)
 		return kNoSyntaxNode;
 	}
 	seen = true;
-	last_type_name_ = Spelling();
+	const string name = Spelling();
+	last_type_name_ = name;
 	Advance();
-	if(At(posttoken::OP_LT))
+	// N3485 14.2/2 for the type-id reading of a template argument: where the
+	// `<` could close the enclosing argument list, a qualified name that
+	// lookup did not find to be a template keeps it, because a template-id
+	// there would take the `>` the list needs.  An unqualified name keeps the
+	// course's lexical-fallback speculation, and a context without a list to
+	// close keeps both readings.
+	const bool in_argument_list = angle_depth_ > 0 && nested_delim_ == 0;
+	if(At(posttoken::OP_LT) && (!present || NameKind(name) == kNameTemplate || !in_argument_list))
 	{
 		TryTemplateIdTail();
 	}
