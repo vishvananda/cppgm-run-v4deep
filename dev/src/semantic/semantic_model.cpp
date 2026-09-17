@@ -410,10 +410,69 @@ bool Model::SizeOf(int id, unsigned long long& size) const
 		return true;
 	}
 	case kTypeClass:
-		return false;
+	{
+		unsigned long long align = 1;
+		return ClassLayout(id, size, align, 0);
+	}
 	default:
 		return false;
 	}
+}
+
+// 9.2 [class.mem]: the members are laid out in declaration order, each at its
+// own alignment, and the class takes the largest member alignment.  An empty
+// class still occupies one byte (5.3.3/2).  A class that reaches itself - only
+// possible through a definition that is not yet complete - has no layout.
+bool Model::ClassLayout(int id, unsigned long long& size, unsigned long long& align,
+                        int depth) const
+{
+	const Type& type = Get(id);
+	if(!type.complete || type.decl_scope < 0 || depth > 64)
+	{
+		return false;
+	}
+	const Scope& scope = ScopeOf(type.decl_scope);
+	unsigned long long total = 0;
+	unsigned long long widest = 1;
+	for(size_t index = 0; index < scope.bindings.size(); ++index)
+	{
+		const Binding& member = scope.bindings[index];
+		if(member.kind != kBindingVariable)
+		{
+			continue;
+		}
+		const int member_type = EntityOf(member.entity).type;
+		unsigned long long member_size = 0;
+		unsigned long long member_align = 0;
+		if(Get(member_type).kind == kTypeClass)
+		{
+			if(!ClassLayout(member_type, member_size, member_align, depth + 1))
+			{
+				return false;
+			}
+		}
+		else if(!SizeOf(member_type, member_size) || !AlignOf(member_type, member_align))
+		{
+			return false;
+		}
+		if(member_align == 0)
+		{
+			member_align = 1;
+		}
+		total = (total + member_align - 1) / member_align * member_align;
+		total += member_size;
+		if(member_align > widest)
+		{
+			widest = member_align;
+		}
+	}
+	size = (total + widest - 1) / widest * widest;
+	if(size == 0)
+	{
+		size = 1;
+	}
+	align = widest;
+	return true;
 }
 
 bool Model::AlignOf(int id, unsigned long long& align) const
@@ -441,6 +500,11 @@ bool Model::AlignOf(int id, unsigned long long& align) const
 		return true;
 	case kTypeArray:
 		return AlignOf(type.base, align);
+	case kTypeClass:
+	{
+		unsigned long long size = 0;
+		return ClassLayout(id, size, align, 0);
+	}
 	default:
 		return false;
 	}

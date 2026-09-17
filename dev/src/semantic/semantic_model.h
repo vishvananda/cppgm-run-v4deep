@@ -327,6 +327,12 @@ public:
 	bool SizeOf(int id, unsigned long long& size) const;
 	bool AlignOf(int id, unsigned long long& align) const;
 
+private:
+	bool ClassLayout(int id, unsigned long long& size, unsigned long long& align,
+	                 int depth) const;
+
+public:
+
 	// --- scopes and entities --------------------------------------------
 	int NewScope(EScopeKind kind, const std::string& name, int parent);
 	Scope& ScopeOf(int id)

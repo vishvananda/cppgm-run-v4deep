@@ -167,6 +167,15 @@ SRC
 	'array-bound-must-be-positive' => [ 'a bound must convert to a positive size', <<'SRC' ],
 void f() { int values[0]; }
 SRC
+	'class-layout-decides-sizeof' => [ 'members are laid out in declaration order at their own alignment (9.2)', <<'SRC' ],
+struct C { char a[3]; short s; int i; };
+int laid_out[sizeof(C)];
+int aligned[alignof(C)];
+SRC
+	'empty-class-still-occupies-one-byte' => [ 'a class with no members has size one (5.3.3/2)', <<'SRC' ],
+struct C {};
+int laid_out[sizeof(C)];
+SRC
 	'sizeof-incomplete-class' => [ 'sizeof of an incomplete type is ill formed', <<'SRC' ],
 struct C;
 int a[sizeof(C)];
