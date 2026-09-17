@@ -626,7 +626,8 @@ bool Parser::CanStartDeclSpecifier() const
 {
 	const int kind = KindAt();
 	if(IsSimpleTypeSpecifierKind(kind) || IsCvQualifierKind(kind) ||
-	   IsStorageSpecifierKind(kind) || kind == posttoken::KW_DECLTYPE)
+	   IsStorageSpecifierKind(kind) || kind == posttoken::KW_DECLTYPE ||
+	   kind == posttoken::KW_ENUM || IsClassKeyKind(kind))
 	{
 		return true;
 	}
@@ -690,7 +691,15 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		}
 		if(IsClassKeyKind(kind))
 		{
-			Add(seq, ClassSpecifier());
+			if(At(posttoken::OP_LBRACE, 1) ||
+			   (At(kIdentifierToken, 1) && AtAny(posttoken::OP_LBRACE, posttoken::OP_LT, 2)))
+			{
+				Add(seq, ClassSpecifier());
+			}
+			else
+			{
+				Add(seq, ElaboratedTypeSpecifier());
+			}
 			saw_type = true;
 			continue;
 		}
@@ -926,7 +935,8 @@ int Parser::DeclarationBody(bool allow_function_definition)
 	const int specifiers = DeclSpecifierSeq(saw_type, saw_typedef);
 	if(specifiers == kNoSyntaxNode)
 	{
-		throw SyntaxError("expected declaration");
+		throw SyntaxError("expected declaration at token " + to_string(pos_) + " (`" +
+		                  Spelling() + "`)");
 	}
 
 	if(allow_function_definition)
