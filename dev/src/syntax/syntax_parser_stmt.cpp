@@ -148,6 +148,25 @@ int Parser::CompoundStatement()
 {
 	const int node = Tag("compound-statement");
 	Expect(posttoken::OP_LBRACE, "`{`");
+	if(collecting_names_)
+	{
+		// The name-collecting pass reads declarations only; a body's contents
+		// cannot declare a class member, so it is skipped whole.
+		int depth = 1;
+		while(depth > 0 && !AtEof())
+		{
+			if(At(posttoken::OP_LBRACE))
+			{
+				++depth;
+			}
+			else if(At(posttoken::OP_RBRACE))
+			{
+				--depth;
+			}
+			Advance();
+		}
+		return node;
+	}
 	PushScope();
 	// A block is the one place an expression statement is possible, so the
 	// name categories decide the block-item choice here again.

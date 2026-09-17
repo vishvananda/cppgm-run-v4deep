@@ -281,6 +281,7 @@ Parser::Parser(const vector<SyntaxToken>& tokens, SyntaxArena& arena)
 	, nested_delim_(0)
 	, declaration_only_(1)
 	, next_angle_speculative_(false)
+	, collecting_names_(false)
 {
 	scopes_.push_back(map<string, int>());
 }
@@ -1335,6 +1336,35 @@ int Parser::ClassForwardDeclaration()
 	return node;
 }
 
+// True when the class body being read contains an inline member function
+// definition, which is the only place a later member's name can be needed.
+bool Parser::ClassBodyHasInlineMemberDefinition() const
+{
+	int depth = 0;
+	for(size_t index = pos_; index < tokens_.size(); ++index)
+	{
+		const int kind = tokens_[index].kind;
+		if(kind == posttoken::OP_LBRACE)
+		{
+			if(depth == 0)
+			{
+				return true;
+			}
+			++depth;
+			continue;
+		}
+		if(kind == posttoken::OP_RBRACE)
+		{
+			if(depth == 0)
+			{
+				return false;
+			}
+			--depth;
+		}
+	}
+	return false;
+}
+
 // `class-key name` where a type name is expected, as in `sizeof(struct S)`.
 int Parser::ElaboratedTypeSpecifier()
 {
@@ -1389,6 +1419,54 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		classes_.push_back(name);
 		++declaration_only_;
 		Advance();
+		if(ClassBodyHasInlineMemberDefinition())
+		{
+			// A member function body may name a type its class declares after
+			// it, so the members are read once for their names - which are not
+			// rolled back - and then again for the tree.
+			const size_t saved_pos = pos_;
+			const bool saved_rshift = rshift_split_;
+			const size_t saved_nodes = arena_.NodeCount();
+			const size_t saved_scopes = scopes_.size();
+			const size_t saved_scope_size = scopes_.back().size();
+			const size_t saved_classes = classes_.size();
+			const int saved_angle = angle_depth_;
+			const int saved_delim = nested_delim_;
+			const size_t saved_angles = angle_speculative_.size();
+			const size_t saved_logical = angle_logical_.size();
+			const size_t saved_delims = angle_delims_.size();
+			collecting_names_ = true;
+			try
+			{
+				while(!At(posttoken::OP_RBRACE) && !AtEof())
+				{
+					ClassMember();
+				}
+			}
+			catch(const SyntaxError&)
+			{
+			}
+			collecting_names_ = false;
+			pos_ = saved_pos;
+			rshift_split_ = saved_rshift;
+			arena_.DropTo(saved_nodes);
+			while(scopes_.size() > saved_scopes)
+			{
+				scopes_.pop_back();
+			}
+			// The names the collecting pass bound stay bound: they are what it
+			// was run for.
+			(void)saved_scope_size;
+			while(classes_.size() > saved_classes)
+			{
+				classes_.pop_back();
+			}
+			angle_depth_ = saved_angle;
+			nested_delim_ = saved_delim;
+			angle_speculative_.resize(saved_angles);
+			angle_logical_.resize(saved_logical);
+			angle_delims_.resize(saved_delims);
+		}
 		while(!At(posttoken::OP_RBRACE) && !AtEof())
 		{
 			Add(node, ClassMember());

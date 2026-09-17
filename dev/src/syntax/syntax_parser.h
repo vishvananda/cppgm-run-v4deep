@@ -130,6 +130,7 @@ private:
 	// --- classes and enums ----------------------------------------------
 	int ClassDeclaration();
 	int ClassSpecifier(bool require_semicolon);
+	bool ClassBodyHasInlineMemberDefinition() const;
 	int ClassForwardDeclaration();
 	int ElaboratedTypeSpecifier();
 	int EnumDeclaration();
@@ -240,6 +241,8 @@ private:
 	std::vector<char> angle_logical_;
 	std::vector<int> angle_delims_;
 	bool next_angle_speculative_;
+	// Set while a class body is read for its member names only.
+	bool collecting_names_;
 };
 
 // Parses one translation unit's tokens and returns the root node, throwing
