@@ -1231,7 +1231,10 @@ int Parser::TemplateParameter()
 	}
 	if(At(posttoken::KW_TEMPLATE))
 	{
-		const int node = Tag("template-template-parameter");
+		// `template-parameter`'s second form: a marker for the keyword, then
+		// the clause, the key and the name.
+		const int node = Tag("type-parameter");
+		Add(node, Tag("template-template-parameter"));
 		Advance();
 		Add(node, TemplateParameterClause());
 		Add(node, Terminal("parameter-key", Current()));
@@ -2598,11 +2601,13 @@ bool Parser::AtConversionTypeStart() const
 	{
 		return true;
 	}
-	if(kind == kIdentifierToken)
+	if(kind == posttoken::KW_ENUM || IsClassKeyKind(kind))
 	{
-		return IsTypeName(Spelling());
+		return true;
 	}
-	return false;
+	// A conversion function's type may be any name, declared or not: an
+	// identifier can never be an operator token, so nothing else is possible.
+	return kind == kIdentifierToken;
 }
 
 int Parser::UnqualifiedId(const char* tag)
@@ -2620,6 +2625,10 @@ int Parser::UnqualifiedId(const char* tag)
 			{
 				name += Spelling();
 				Advance();
+			}
+			if(At(posttoken::OP_LT) && TryTemplateIdTail())
+			{
+				return Named(tag, JoinedText(start, EndPosition()));
 			}
 			return Named(tag, name);
 		}
