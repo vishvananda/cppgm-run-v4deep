@@ -855,11 +855,43 @@ int Parser::Declaration()
 	}
 	if(At(posttoken::KW_ENUM))
 	{
-		return EnumSpecifier();
+		// `enum name { ... }`, `enum name : type ...` and `enum name ;` are
+		// enum declarations; anything else is an elaborated type specifier in a
+		// declaration of its own.
+		size_t cursor = 1;
+		if(At(posttoken::KW_CLASS, cursor) || At(posttoken::KW_STRUCT, cursor))
+		{
+			++cursor;
+		}
+		if(At(kIdentifierToken, cursor))
+		{
+			++cursor;
+		}
+		if(At(posttoken::OP_LBRACE, cursor) || At(posttoken::OP_COLON, cursor) ||
+		   At(posttoken::OP_SEMICOLON, cursor))
+		{
+			return EnumSpecifier();
+		}
+		return DeclarationCommon(true);
 	}
 	if(IsClassKeyKind(KindAt()))
 	{
-		return ClassDeclaration();
+		if(At(kIdentifierToken, 1) && At(posttoken::OP_SEMICOLON, 2))
+		{
+			return ClassForwardDeclaration();
+		}
+		// A class-specifier has a body or ends the declaration; anything else
+		// is an elaborated type specifier in a declaration of its own.
+		const Mark mark = Take();
+		try
+		{
+			return ClassSpecifier();
+		}
+		catch(const SyntaxError&)
+		{
+		}
+		Rollback(mark);
+		return DeclarationCommon(true);
 	}
 	return DeclarationCommon(true);
 }
@@ -1265,7 +1297,12 @@ int Parser::ClassSpecifier()
 	{
 		Add(node, BaseClause());
 	}
-	if(At(posttoken::OP_LBRACE))
+	if(!At(posttoken::OP_LBRACE))
+	{
+		// A body-less class-specifier is only a declaration when it ends here.
+		Expect(posttoken::OP_SEMICOLON, "`;`");
+		return node;
+	}
 	{
 		PushScope();
 		classes_.push_back(name);
@@ -1280,8 +1317,6 @@ int Parser::ClassSpecifier()
 		classes_.pop_back();
 		PopScope();
 	}
-	// The terminating `;` belongs to the declaration the specifier is part of,
-	// so a class-specifier in a decl-specifier-seq leaves it alone.
 	Accept(posttoken::OP_SEMICOLON);
 	return node;
 }
@@ -2257,7 +2292,8 @@ bool Parser::AtTypeSpecifierStart(size_t offset) const
 {
 	const int kind = KindAt(offset);
 	if(IsSimpleTypeSpecifierKind(kind) || IsCvQualifierKind(kind) ||
-	   kind == posttoken::KW_DECLTYPE || kind == posttoken::OP_COLON2)
+	   kind == posttoken::KW_DECLTYPE || kind == posttoken::OP_COLON2 ||
+	   kind == posttoken::KW_ENUM || kind == posttoken::KW_TYPENAME)
 	{
 		return true;
 	}
@@ -2265,7 +2301,7 @@ bool Parser::AtTypeSpecifierStart(size_t offset) const
 	{
 		return IsTypeName(Spelling(offset));
 	}
-	return false;
+	return IsClassKeyKind(kind);
 }
 
 // The last component of a `nested-name-specifier`, which is what a constructor
@@ -2305,11 +2341,17 @@ string Parser::NestedNameSpecifier(bool& present)
 			return component;
 		}
 	}
-	else if(At(posttoken::KW_DECLTYPE) && At(posttoken::OP_COLON2, 1))
+	else if(At(posttoken::KW_DECLTYPE))
 	{
-		present = true;
+		const Mark decltype_mark = Take();
 		DecltypeSpecifier();
-		Expect(posttoken::OP_COLON2, "`::`");
+		if(!At(posttoken::OP_COLON2))
+		{
+			Rollback(decltype_mark);
+			return component;
+		}
+		present = true;
+		Advance();
 	}
 	else
 	{
@@ -2602,16 +2644,15 @@ string Parser::TextAt(size_t index) const
 int Parser::IdExpression(const char* tag)
 {
 	const size_t start = Position();
-	bool qualified = false;
-	if(At(posttoken::OP_COLON2) ||
-	   (At(kIdentifierToken) && At(posttoken::OP_COLON2, 1)) ||
-	   (At(posttoken::KW_DECLTYPE) && At(posttoken::OP_COLON2, 1)))
+	const Mark mark = Take();
+	bool present = false;
+	NestedNameSpecifier(present);
+	const bool qualified = present;
+	if(!qualified)
 	{
-		bool present = false;
-		NestedNameSpecifier(present);
-		qualified = present;
+		Rollback(mark);
 	}
-	if(qualified)
+	else
 	{
 		Accept(posttoken::KW_TEMPLATE);
 	}
