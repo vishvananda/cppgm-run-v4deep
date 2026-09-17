@@ -146,6 +146,7 @@ private:
 	int ClassDeclaration();
 	int ClassSpecifier();
 	int ClassForwardDeclaration();
+	int ElaboratedTypeSpecifier();
 	int EnumDeclaration();
 	int EnumSpecifier();
 	int BaseClause();

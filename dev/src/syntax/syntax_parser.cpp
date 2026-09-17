@@ -1219,7 +1219,23 @@ int Parser::ClassForwardDeclaration()
 	Expect(kIdentifierToken, "a class name");
 	arena_.SetLabel(node, name);
 	Bind(name, kNameType);
-	Expect(posttoken::OP_SEMICOLON, "`;`");
+	Accept(posttoken::OP_SEMICOLON);
+	return node;
+}
+
+// `class-key name` where a type name is expected, as in `sizeof(struct S)`.
+int Parser::ElaboratedTypeSpecifier()
+{
+	const int node = Tag("class-forward-declaration");
+	Add(node, Terminal("class-key", Current()));
+	Advance();
+	if(At(kIdentifierToken))
+	{
+		const string name = Spelling();
+		arena_.SetLabel(node, name);
+		Bind(name, kNameType);
+		Advance();
+	}
 	return node;
 }
 
@@ -2195,6 +2211,17 @@ int Parser::TypeSpecifierSeq()
 			}
 			Add(node, Named("type-name", JoinedText(start, EndPosition())));
 			any = true;
+			continue;
+		}
+		if(IsClassKeyKind(kind))
+		{
+			Add(node, ElaboratedTypeSpecifier());
+			any = true;
+			continue;
+		}
+		if(At(posttoken::KW_TYPENAME))
+		{
+			Advance();
 			continue;
 		}
 		break;

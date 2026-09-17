@@ -762,7 +762,14 @@ int Parser::PostfixExpression()
 			const int member = Terminal("member-expression", Current());
 			Advance();
 			Add(member, node);
-			Add(member, IdExpression("identifier"));
+			const size_t name_start = Position();
+			const bool dependent = Accept(posttoken::KW_TEMPLATE);
+			const int name = IdExpression("identifier");
+			if(dependent)
+			{
+				arena_.SetLabel(name, JoinedText(name_start, EndPosition()));
+			}
+			Add(member, name);
 			node = member;
 			continue;
 		}
@@ -956,6 +963,31 @@ int Parser::PrimaryExpression()
 	if(kind == posttoken::OP_LBRACE)
 	{
 		return BracedInitList();
+	}
+	// `typename` in an expression only marks the name that follows it as a
+	// type, which the dump does not keep.
+	if(kind == posttoken::KW_TYPENAME)
+	{
+		Advance();
+		return PrimaryExpression();
+	}
+	if(kind == posttoken::OP_LBRACE)
+	{
+		return BracedInitList();
+	}
+	if(At(kIdentifierToken) || At(posttoken::OP_COLON2) ||
+	   (At(kIdentifierToken) && At(posttoken::OP_LT, 1)))
+	{
+		const Mark mark = Take();
+		const int name = IdExpression("id-expression");
+		if(At(posttoken::OP_LBRACE))
+		{
+			const int call = Tag("call-expression");
+			Add(call, name);
+			Add(call, BracedInitList());
+			return call;
+		}
+		Rollback(mark);
 	}
 	return IdExpression("id-expression");
 }
