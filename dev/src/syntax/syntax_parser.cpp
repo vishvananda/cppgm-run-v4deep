@@ -2421,6 +2421,7 @@ int Parser::DecltypeSpecifier()
 void Parser::EnterAngle()
 {
 	++angle_depth_;
+	angle_delims_.push_back(nested_delim_);
 	nested_delim_ = 0;
 	angle_speculative_.push_back(next_angle_speculative_ ? 1 : 0);
 	angle_logical_.push_back(0);
@@ -2441,9 +2442,10 @@ void Parser::LeaveAngle()
 	{
 		angle_logical_.pop_back();
 	}
-	if(angle_depth_ == 0)
+	if(!angle_delims_.empty())
 	{
-		nested_delim_ = 0;
+		nested_delim_ = angle_delims_.back();
+		angle_delims_.pop_back();
 	}
 }
 

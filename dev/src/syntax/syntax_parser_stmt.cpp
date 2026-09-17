@@ -296,6 +296,7 @@ int Parser::IterationStatement()
 		// A range-based for: the init is the range declaration.
 		Advance();
 		arena_.PutTag(init, "range-declaration");
+		arena_.PutTag(node, "range-for-statement");
 		Add(node, init);
 		const int range = Tag("range-initializer");
 		Add(range, Expression());

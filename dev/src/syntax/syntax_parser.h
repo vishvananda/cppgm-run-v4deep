@@ -261,6 +261,7 @@ private:
 	// whether a `||`, `&&` or `?:` was seen inside it.
 	std::vector<char> angle_speculative_;
 	std::vector<char> angle_logical_;
+	std::vector<int> angle_delims_;
 	bool next_angle_speculative_;
 };
 
