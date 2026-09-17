@@ -139,6 +139,8 @@ bool IsOperatorTokenKind(int kind)
 	case posttoken::OP_BORASS:
 	case posttoken::OP_LSHIFT:
 	case posttoken::OP_RSHIFT:
+	case posttoken::OP_LSHIFTASS:
+	case posttoken::OP_RSHIFTASS:
 	case posttoken::OP_EQ:
 	case posttoken::OP_NE:
 	case posttoken::OP_LE:
@@ -627,7 +629,8 @@ bool Parser::CanStartDeclSpecifier() const
 	const int kind = KindAt();
 	if(IsSimpleTypeSpecifierKind(kind) || IsCvQualifierKind(kind) ||
 	   IsStorageSpecifierKind(kind) || kind == posttoken::KW_DECLTYPE ||
-	   kind == posttoken::KW_ENUM || IsClassKeyKind(kind))
+	   kind == posttoken::KW_ENUM || IsClassKeyKind(kind) ||
+	   kind == posttoken::OP_COLON2)
 	{
 		return true;
 	}
@@ -658,8 +661,10 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		if(IsSimpleTypeSpecifierKind(kind) || IsCvQualifierKind(kind) ||
 		   IsStorageSpecifierKind(kind))
 		{
-			if(IsSimpleTypeSpecifierKind(kind))
+			if(IsSimpleTypeSpecifierKind(kind) || kind == posttoken::KW_AUTO)
 			{
+				// `auto` is a placeholder for a type, so it ends the type part
+				// the same way a type name does.
 				saw_type = true;
 			}
 			if(kind == posttoken::KW_TYPEDEF)
@@ -700,6 +705,20 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 			{
 				Add(seq, ElaboratedTypeSpecifier());
 			}
+			saw_type = true;
+			continue;
+		}
+		if(kind == posttoken::OP_COLON2)
+		{
+			const size_t start = Position();
+			bool seen = false;
+			QualifiedTypeName(seen, false);
+			if(!seen)
+			{
+				break;
+			}
+			const size_t last = EndPosition();
+			Add(seq, Named("decl-specifier", JoinedText(start, last)));
 			saw_type = true;
 			continue;
 		}
@@ -942,9 +961,18 @@ int Parser::DeclarationBody(bool allow_function_definition)
 	if(allow_function_definition)
 	{
 		const Mark mark = Take();
-		const int declarator = Declarator();
-		const bool is_function = declarator_is_function_;
-		if(At(posttoken::OP_LBRACE) && is_function)
+		int declarator = kNoSyntaxNode;
+		bool have_declarator = true;
+		try
+		{
+			declarator = Declarator();
+		}
+		catch(const SyntaxError&)
+		{
+			have_declarator = false;
+		}
+		const bool is_function = have_declarator && declarator_is_function_;
+		if(have_declarator && At(posttoken::OP_LBRACE) && is_function)
 		{
 			const int node = Tag("function-definition");
 			Add(node, specifiers);
@@ -952,7 +980,7 @@ int Parser::DeclarationBody(bool allow_function_definition)
 			Add(node, CompoundStatement());
 			return node;
 		}
-		if(At(posttoken::KW_TRY) && is_function)
+		if(have_declarator && At(posttoken::KW_TRY) && is_function)
 		{
 			// A function try block belongs to the function definition.
 			const int node = Tag("function-definition");
@@ -2397,6 +2425,12 @@ string Parser::NestedNameSpecifier(bool& present)
 int Parser::QualifiedTypeName(bool& seen, bool require_type)
 {
 	seen = false;
+	if(At(posttoken::KW_DECLTYPE))
+	{
+		DecltypeSpecifier();
+		seen = true;
+		return kNoSyntaxNode;
+	}
 	bool present = false;
 	NestedNameSpecifier(present);
 	if(!At(kIdentifierToken))
