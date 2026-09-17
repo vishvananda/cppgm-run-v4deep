@@ -10,37 +10,48 @@ namespace cppgm
 namespace preprocess
 {
 
-std::vector<PPToken> ReadPreprocessingTokens(std::string bytes, std::uint32_t file)
+namespace
 {
-	TranslatedSource source(std::move(bytes));
-	PPTokenReader reader(file);
-	PPTokenizer tokenizer(source, reader);
-	tokenizer.Tokenize();
-	return std::move(reader.Tokens());
-}
+
+// The collector `RetokenizeSpelling` reads its one token through.  A pasted
+// spelling that retokenizes into more than one preprocessing-token is already
+// not a paste, so the second record is enough to answer and anything past it is
+// dropped rather than grown.
+class SpellingCollector : public IPPStreamTokenSink
+{
+public:
+	void OnPreprocessingToken(PPToken token) override
+	{
+		if (tokens_.size() > 1)
+			return;
+		if (token.kind == kPPWhitespace || token.kind == kPPNewLine ||
+		    token.kind == kPPEof)
+		{
+			return;
+		}
+		tokens_.push_back(std::move(token));
+	}
+
+	std::vector<PPToken>& Tokens() { return tokens_; }
+
+private:
+	std::vector<PPToken> tokens_;
+};
+
+} // namespace
 
 std::vector<PPToken> RetokenizeSpelling(const std::string& spelling, std::uint32_t file,
                                         std::uint32_t line)
 {
 	TranslatedSource source(spelling);
-	PPTokenReader reader(file);
+	SpellingCollector collector;
+	PPTokenReader reader(file, collector);
 	PPTokenizer tokenizer(source, reader);
 	tokenizer.Tokenize();
 
-	std::vector<PPToken> tokens;
-	const std::vector<PPToken>& read = reader.Tokens();
-	for (std::size_t index = 0; index < read.size(); ++index)
-	{
-		const PPToken& token = read[index];
-		if (token.kind == kPPWhitespace || token.kind == kPPNewLine || token.kind == kPPEof)
-			continue;
-		tokens.push_back(token);
-		// A pasted spelling that retokenizes into more than one
-		// preprocessing-token is already not a paste; stop at the second so a
-		// pathological spelling cannot grow the vector.
-		if (tokens.size() > 1)
-			break;
-	}
+	// The collector stops at the second record, so a spelling that is not one
+	// preprocessing-token is reported as two and the caller rejects it.
+	std::vector<PPToken> tokens = std::move(collector.Tokens());
 	if (!tokens.empty())
 		tokens[0].line = line;
 	return tokens;

@@ -1,6 +1,6 @@
 // Macro replacement: the rescan of 16.3 with the course's nesting rule.
 //
-// The input is a text-sequence's tokens in a stack whose top is the next token
+// The input is a text-sequence's tokens in a stack whose front is the next token
 // to examine, exactly the structure `macros.md`'s design note suggests: an
 // invocation's tokens are popped and its replacement pushed, so the tokens that
 // follow the invocation in the source are examined again after it - which is
@@ -18,6 +18,13 @@
 // that is neither stringized nor an operand of `##` asks for the expanded form,
 // and the expansion is cached for every other reference to the same parameter.
 // `stringize(max(0))` therefore stays legal while `# x x` does not.
+//
+// A text-sequence is not held as one owning vector.  The sequence arrives from
+// an `IPPTextFeed` a token at a time and the rescan runs as far as the tokens
+// seen so far allow, then suspends.  Only a construct whose meaning still
+// depends on tokens that have not arrived is retained: a function-like macro
+// name whose `(` may yet follow, and an argument list that is still open.  Both
+// are bounded by the source construct, not by the translation unit.
 
 #pragma once
 
@@ -45,6 +52,17 @@ public:
 	virtual ~IMacroBuiltins() {}
 };
 
+// The tokens of one text sequence, pulled in source order as the rescan needs
+// them.  False means no token is available *now*: the sequence may still have
+// more, which is why the rescan suspends rather than deciding.
+class IPPTextFeed
+{
+public:
+	virtual bool NextTextToken(PPToken& token) = 0;
+
+	virtual ~IPPTextFeed() {}
+};
+
 class MacroExpander
 {
 public:
@@ -53,18 +71,19 @@ public:
 		, builtins_(builtins)
 	{}
 
-	// Macro-replaces `input` and appends the result to `output`.  The same
-	// expander serves every call: the frames it needs are on the heap and keep
-	// their capacity across the run.
+	// Macro-replaces `input` and appends the result to `output`.  The whole
+	// input is at hand, so the rescan never suspends.  Used for the bounded
+	// inputs - a directive line, an argument prescan - and not for a
+	// translation unit's text sequences.
 	void Expand(const std::vector<PPToken>& input, std::vector<PPToken>& output);
 
-	// Expands the text-sequence `input[begin, end)` and reports each token to
-	// `sink` as soon as it is final.  Nothing re-examines a token that has been
-	// reported - a rescan only ever moves forward - so the sequence is never
-	// held as one owning vector.  The tokens are consumed: the caller must not
-	// read them again.
-	void ExpandToSink(std::vector<PPToken>& input, std::size_t begin, std::size_t end,
-	                  IPPTextSink& sink);
+	// Macro-replaces a text sequence that arrives from `feed`, reporting each
+	// token to `sink` as soon as it is final.  `Begin` starts the sequence,
+	// `Pump` continues it after the feed has grown, and `Finish` declares the
+	// feed exhausted and drains what is left.
+	void BeginTextSequence(IPPTextFeed& feed, IPPTextSink& sink);
+	void PumpTextSequence();
+	void FinishTextSequence();
 
 private:
 	// One argument of an invocation.  The expanded form and both painted forms
@@ -88,23 +107,48 @@ private:
 
 	// One rescan in progress.  Argument prescan is a nested rescan, so the
 	// stack and the arguments belong to the frame and not to the expander.
+	//
+	// The stack's back is the next token to examine and its front is the token
+	// furthest ahead, so a replacement goes on the back and a token the feed
+	// supplies goes in front of the tokens that follow the invocation.
 	struct Frame
 	{
 		std::vector<PPToken> stack;
 		std::vector<Argument> arguments;
+		// Set on the frame of a text sequence: the tokens come from here.
+		IPPTextFeed* feed;
 		// Set on the frame of a top-level text sequence: the reported tokens go
-		// here, a chunk at a time, instead of accumulating in the output vector.
+		// here, a chunk at a time, instead of accumulating in an output vector.
 		IPPTextSink* sink;
+		// The invocation whose argument list is still open.  The `(` has been
+		// consumed, `arguments` holds what has been read, and `depth` is the
+		// parenthesis nesting inside the argument being read.
+		const PPMacro* collecting;
+		PPToken collecting_head;
+		unsigned collecting_depth;
+		// How far the lookahead of the head token got before the feed ran dry,
+		// or 0 when no head is waiting.  The head stays at the stack's back and
+		// a supplied token goes in at the front, so the distance from the back
+		// is unchanged and a resumed lookahead does not walk the same white
+		// space twice.
+		std::size_t look;
 
 		Frame()
-			: sink(nullptr)
+			: feed(nullptr)
+			, sink(nullptr)
+			, collecting(nullptr)
+			, collecting_depth(0)
+			, look(0)
 		{}
 	};
 
 	void Run(Frame& frame, std::vector<PPToken>& output);
 	void FlushChunk(Frame& frame, std::vector<PPToken>& output);
-	void Invoke(Frame& frame, const PPMacro& macro, std::vector<PPToken>& output);
-	void CollectArguments(Frame& frame, const PPMacro& macro);
+	// One more token of the sequence, or false when the feed has none now.
+	bool Pull(Frame& frame);
+	bool Invoke(Frame& frame, const PPMacro& macro, std::vector<PPToken>& output);
+	bool CollectArguments(Frame& frame);
+	void CompleteInvocation(Frame& frame);
 	void Substitute(Frame& frame, const PPMacro& macro, const PPToken& head);
 
 	// The argument `index` as the definition substitutes it.  `raw` selects the

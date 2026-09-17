@@ -2,21 +2,28 @@
 //
 // `PPTokenizer` reports one callback per preprocessing-token and asks its
 // consumer nothing but whether a location is wanted.  `PPTokenReader` is the
-// consumer that wants one: it records each callback as a `PPToken` stamped with
-// the file index it was handed and the physical line the tokenizer reported.
-// No token vector is built anywhere else, and the reader's vector is the one
-// place a token outlives its callback.
+// consumer that wants one: it turns each callback into a `PPToken` stamped with
+// the file index it was handed and the physical line the tokenizer reported,
+// and passes it straight on.  The callback's spelling is borrowed, so the
+// record that outlives it owns its own copy - and nothing else does.
 //
-// `Retokenize` is the same pipeline over a synthesized spelling, which is what
-// the `##` operator and the phase-7 validity of a paste need: a pasted spelling
-// must form exactly one preprocessing-token or the translation unit is
-// rejected.
+// The reader keeps no vector: the preprocessor consumes each record as it
+// arrives, which is what keeps a translation unit's cost at its source buffer
+// and the construct currently being preprocessed rather than at every token it
+// contains.
+//
+// `RetokenizeSpelling` is the same pipeline over a synthesized spelling, which
+// is what the `##` operator and the phase-7 validity of a paste need: a pasted
+// spelling must form exactly one preprocessing-token or the translation unit is
+// rejected.  That spelling is one token's worth of text, so its records are
+// collected.
 
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "preprocess/preproc/pp_token.h"
@@ -27,11 +34,21 @@ namespace cppgm
 namespace preprocess
 {
 
+// Where a preprocessing-token record goes once its callback has returned.
+class IPPStreamTokenSink
+{
+public:
+	virtual void OnPreprocessingToken(PPToken token) = 0;
+
+	virtual ~IPPStreamTokenSink() {}
+};
+
 class PPTokenReader : public IPPTokenStream
 {
 public:
-	explicit PPTokenReader(std::uint32_t file)
-		: file_(file)
+	PPTokenReader(std::uint32_t file, IPPStreamTokenSink& sink)
+		: sink_(sink)
+		, file_(file)
 		, line_(1)
 	{}
 
@@ -76,10 +93,6 @@ public:
 	}
 	void emit_eof() override { Push(kPPEof, ""); }
 
-	// The records the reader has taken so far.  The vector is left empty and
-	// its capacity kept, so one reader can serve every file of a run.
-	std::vector<PPToken>& Tokens() { return tokens_; }
-
 private:
 	void Push(EPPTokenKind kind, const std::string& spelling)
 	{
@@ -88,16 +101,13 @@ private:
 		token.file = file_;
 		token.line = static_cast<std::uint32_t>(line_);
 		token.kind = kind;
-		tokens_.push_back(std::move(token));
+		sink_.OnPreprocessingToken(std::move(token));
 	}
 
-	std::vector<PPToken> tokens_;
+	IPPStreamTokenSink& sink_;
 	std::uint32_t file_;
 	std::size_t line_;
 };
-
-// Reads one translated source and returns its records, with the trailing eof.
-std::vector<PPToken> ReadPreprocessingTokens(std::string bytes, std::uint32_t file);
 
 // Tokenizes a synthesized spelling.  The result is returned without the
 // trailing eof and without whitespace or new-line records; a caller that needs

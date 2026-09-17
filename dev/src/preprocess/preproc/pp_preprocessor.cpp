@@ -6,6 +6,8 @@
 
 #include "preprocess/preproc/pp_error.h"
 #include "preprocess/preproc/pp_token_reader.h"
+#include "preprocess/tokens/pp_source_translation.h"
+#include "preprocess/tokens/pp_tokenizer.h"
 
 namespace cppgm
 {
@@ -232,6 +234,8 @@ void Preprocessor::ProcessPrimarySource(const std::string& path)
 	pragma_once_.clear();
 	counter_ = 0;
 	stack_.clear();
+	text_.clear();
+	text_active_ = false;
 	DefinePredefinedMacros();
 	ProcessFile(path);
 }
@@ -330,15 +334,20 @@ void Preprocessor::ProcessFile(const std::string& path)
 	const std::uint32_t index = static_cast<std::uint32_t>(files_.size());
 	files_.push_back(path);
 
-	std::vector<PPToken> tokens = ReadPreprocessingTokens(std::move(bytes), index);
-
 	FileState state;
 	state.file = index;
-	state.line_delta = 0;
 	state.presumed_file = path;
 	stack_.push_back(state);
 
-	ProcessTokens(tokens);
+	// The tokenizer reports the whole file through the callbacks below, and
+	// each token is consumed before the next one is recognized: this frame's
+	// source buffer and the construct currently open are all that is held.
+	TranslatedSource source(std::move(bytes));
+	PPTokenReader reader(index, *this);
+	PPTokenizer tokenizer(source, reader);
+	tokenizer.Tokenize();
+
+	EndTextSequence();
 
 	const bool unterminated = !stack_.back().conditionals.empty();
 	stack_.pop_back();
@@ -346,67 +355,102 @@ void Preprocessor::ProcessFile(const std::string& path)
 		throw PreprocessError("unterminated conditional inclusion");
 }
 
-void Preprocessor::ProcessTokens(std::vector<PPToken>& tokens)
+void Preprocessor::OnPreprocessingToken(PPToken token)
 {
-	const std::size_t count = tokens.size();
-	std::size_t at = 0;
-	bool line_start = true;
-	while (at < count)
-	{
-		const PPToken& token = tokens[at];
-		if (token.kind == kPPEof)
-			break;
-		if (token.kind == kPPWhitespace)
-		{
-			++at;
-			continue;
-		}
-		if (token.kind == kPPNewLine)
-		{
-			++at;
-			line_start = true;
-			continue;
-		}
-		if (line_start && IsHash(token))
-		{
-			at = HandleDirective(tokens, at);
-			line_start = true;
-			continue;
-		}
+	FileState& state = Current();
 
-		// A text-sequence runs to the next directive, across new-lines: a
-		// new-line is white space once the sequence is identified.
-		const std::size_t begin = at;
-		std::size_t end = count;
-		while (at < count)
-		{
-			const PPToken& inner = tokens[at];
-			if (inner.kind == kPPNewLine)
-			{
-				line_start = true;
-				++at;
-				continue;
-			}
-			if (inner.kind == kPPEof)
-			{
-				end = at;
-				break;
-			}
-			if (inner.kind == kPPWhitespace)
-			{
-				++at;
-				continue;
-			}
-			if (line_start && IsHash(inner))
-			{
-				end = at;
-				break;
-			}
-			line_start = false;
-			++at;
-		}
-		HandleTextSequence(tokens, begin, end);
+	if (state.in_directive)
+	{
+		// A directive's tokens end at the new-line that terminates it, which is
+		// kept so `#line` can see the physical line the directive was counted
+		// from.
+		const bool last = token.kind == kPPNewLine || token.kind == kPPEof;
+		state.directive.push_back(std::move(token));
+		if (last)
+			DispatchDirective();
+		return;
 	}
+
+	if (token.kind == kPPEof)
+	{
+		EndTextSequence();
+		return;
+	}
+
+	if (state.line_start && IsHash(token))
+	{
+		// The `#` ends the text-sequence - which must be drained first, because
+		// its tokens precede the directive in the output - and opens a
+		// directive line of its own.
+		EndTextSequence();
+		state.directive.clear();
+		state.directive.push_back(std::move(token));
+		state.in_directive = true;
+		return;
+	}
+
+	// A new-line is white space once a text-sequence has been identified.  It
+	// is the one token that does not end the line the next directive may start
+	// on, and white space never does either.
+	if (token.kind == kPPNewLine)
+	{
+		state.line_start = true;
+		if (!Active())
+			return;
+		token.kind = kPPWhitespace;
+		PushTextToken(std::move(token));
+		return;
+	}
+	if (token.kind == kPPWhitespace)
+	{
+		if (!Active())
+			return;
+		PushTextToken(std::move(token));
+		return;
+	}
+
+	state.line_start = false;
+	if (!Active())
+		return;
+	PushTextToken(std::move(token));
+}
+
+void Preprocessor::DispatchDirective()
+{
+	FileState& state = Current();
+	state.in_directive = false;
+	state.line_start = true;
+	HandleDirective(state.directive, 0);
+	state.directive.clear();
+}
+
+bool Preprocessor::NextTextToken(PPToken& token)
+{
+	if (text_.empty())
+		return false;
+	token = std::move(text_.front());
+	text_.pop_front();
+	return true;
+}
+
+void Preprocessor::PushTextToken(PPToken token)
+{
+	if (!text_active_)
+	{
+		text_active_ = true;
+		expander_.BeginTextSequence(*this, *this);
+	}
+	text_.push_back(std::move(token));
+	expander_.PumpTextSequence();
+}
+
+void Preprocessor::EndTextSequence()
+{
+	if (!text_active_)
+		return;
+	text_active_ = false;
+	expander_.FinishTextSequence();
+	text_.clear();
 }
 
 std::size_t Preprocessor::HandleDirective(const std::vector<PPToken>& tokens, std::size_t hash)
@@ -708,23 +752,6 @@ void Preprocessor::ExecutePragma(const std::string& text)
 		++at;
 	if (text.compare(begin, at - begin, "once") == 0)
 		ApplyPragmaOnce();
-}
-
-void Preprocessor::HandleTextSequence(std::vector<PPToken>& tokens, std::size_t begin,
-                                      std::size_t end)
-{
-	if (begin >= end || !Active())
-		return;
-
-	// A new-line is white space once a text-sequence has been identified, and
-	// the directive scanner has already passed this region.
-	for (std::size_t at = begin; at < end; ++at)
-	{
-		if (tokens[at].kind == kPPNewLine)
-			tokens[at].kind = kPPWhitespace;
-	}
-
-	expander_.ExpandToSink(tokens, begin, end, *this);
 }
 
 void Preprocessor::EmitToken(const PPToken& token)

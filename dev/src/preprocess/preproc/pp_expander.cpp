@@ -1,5 +1,7 @@
 #include "preprocess/preproc/pp_expander.h"
 
+#include <utility>
+
 #include "preprocess/preproc/pp_error.h"
 #include "preprocess/preproc/pp_token_reader.h"
 
@@ -126,22 +128,39 @@ void MacroExpander::Expand(const std::vector<PPToken>& input, std::vector<PPToke
 	frames_.pop_back();
 }
 
-void MacroExpander::ExpandToSink(std::vector<PPToken>& input, std::size_t begin,
-                                 std::size_t end, IPPTextSink& sink)
+void MacroExpander::BeginTextSequence(IPPTextFeed& feed, IPPTextSink& sink)
 {
 	frames_.push_back(Frame());
 	Frame& frame = frames_.back();
+	frame.feed = &feed;
 	frame.sink = &sink;
-	frame.stack.reserve(end - begin);
-	// The stack holds the sequence in reverse, so the tokens are moved out of
-	// the source buffer rather than copied through it.
-	for (std::size_t at = end; at > begin; --at)
-		frame.stack.push_back(std::move(input[at - 1]));
+	Run(frame, chunk_);
+}
 
+void MacroExpander::PumpTextSequence()
+{
+	Frame& frame = frames_.back();
+	Run(frame, chunk_);
+}
+
+void MacroExpander::FinishTextSequence()
+{
+	Frame& frame = frames_.back();
+	frame.feed = nullptr;
 	Run(frame, chunk_);
 	FlushChunk(frame, chunk_);
-
 	frames_.pop_back();
+}
+
+bool MacroExpander::Pull(Frame& frame)
+{
+	if (frame.feed == nullptr)
+		return false;
+	PPToken token;
+	if (!frame.feed->NextTextToken(token))
+		return false;
+	frame.stack.insert(frame.stack.begin(), std::move(token));
+	return true;
 }
 
 void MacroExpander::FlushChunk(Frame& frame, std::vector<PPToken>& output)
@@ -159,8 +178,26 @@ void MacroExpander::FlushChunk(Frame& frame, std::vector<PPToken>& output)
 void MacroExpander::Run(Frame& frame, std::vector<PPToken>& output)
 {
 	std::vector<PPToken>& stack = frame.stack;
-	while (!stack.empty())
+	for (;;)
 	{
+		// An argument list that is still open is finished before the head of
+		// the next invocation is examined, because the head it belongs to has
+		// already been consumed.
+		if (frame.collecting != nullptr)
+		{
+			if (!CollectArguments(frame))
+				break;
+			CompleteInvocation(frame);
+			continue;
+		}
+
+		if (stack.empty())
+		{
+			if (!Pull(frame))
+				break;
+			continue;
+		}
+
 		const PPToken& token = stack.back();
 		if (token.kind == kPPPlacemarker)
 		{
@@ -180,95 +217,140 @@ void MacroExpander::Run(Frame& frame, std::vector<PPToken>& output)
 			const PPMacro* macro = macros_.Find(token.spelling);
 			if (macro != nullptr && !PPTokenIsPainted(token, macro->id))
 			{
-				Invoke(frame, *macro, output);
+				// False means the invocation is undecided: its `(` or the rest
+				// of its argument list has not arrived yet, so the sequence
+				// waits here rather than guessing.
+				if (!Invoke(frame, *macro, output))
+					break;
 				continue;
 			}
 		}
-		output.push_back(token);
+		output.push_back(std::move(stack.back()));
 		stack.pop_back();
 		if (frame.sink != nullptr && output.size() >= kFlushTokens)
 			FlushChunk(frame, output);
 	}
 }
 
-void MacroExpander::Invoke(Frame& frame, const PPMacro& macro,
-                           std::vector<PPToken>& output)
+bool MacroExpander::Invoke(Frame& frame, const PPMacro& macro, std::vector<PPToken>& output)
 {
 	std::vector<PPToken>& stack = frame.stack;
 	const PPToken head = stack.back();
 
 	if (!macro.function_like)
 	{
+		frame.look = 0;
 		stack.pop_back();
 		if (macro.builtin != kPPBuiltinNone)
 		{
 			builtins_.ExpandBuiltinMacro(macro.builtin, head, output);
-			return;
+			return true;
 		}
 		Substitute(frame, macro, head);
-		return;
+		return true;
 	}
 
 	// A function-like macro name is an invocation only when the next token of
-	// the sequence is `(`; white space between the two is allowed.  When it is
-	// not, the name is emitted as an ordinary identifier and is never examined
-	// again, which is what leaves `CALL OPEN )` as `CALL ( )`.
-	std::size_t look = 1;
-	while (look < stack.size() && stack[stack.size() - 1 - look].kind == kPPWhitespace)
-		++look;
-	if (look >= stack.size() || !PPTokenIsPunctuator(stack[stack.size() - 1 - look], "("))
+	// the sequence is `(`; white space between the two is allowed.  The tokens
+	// the sequence has not produced yet are pulled rather than assumed absent:
+	// the `(` may open the next line, and the name may be the last thing in the
+	// file.
+	std::size_t look = frame.look != 0 ? frame.look : 1;
+	for (;;)
 	{
-		output.push_back(head);
+		while (look < stack.size() &&
+		       stack[stack.size() - 1 - look].kind == kPPWhitespace)
+		{
+			++look;
+		}
+		if (look < stack.size())
+			break;
+		if (frame.feed == nullptr)
+			break;
+		if (!Pull(frame))
+		{
+			frame.look = look;
+			return false;
+		}
+	}
+	frame.look = 0;
+
+	if (look >= stack.size() ||
+	    !PPTokenIsPunctuator(stack[stack.size() - 1 - look], "("))
+	{
+		// When it is not, the name is emitted as an ordinary identifier and is
+		// never examined again, which is what leaves `CALL OPEN )` as
+		// `CALL ( )`.
+		output.push_back(std::move(stack.back()));
 		stack.pop_back();
-		return;
+		return true;
 	}
 
-	// The name and the white space between it and the `(` belong to the
-	// invocation and are consumed with it.
-	for (std::size_t popped = 0; popped < look; ++popped)
+	// The name, the white space between it and the `(`, and the `(` itself
+	// belong to the invocation and are consumed with it.  The arguments are
+	// read by `CollectArguments`, which is resumed rather than restarted when
+	// the sequence pauses, so it never has to recognize the `(` again.
+	for (std::size_t popped = 0; popped <= look; ++popped)
 		stack.pop_back();
-	CollectArguments(frame, macro);
-	Substitute(frame, macro, head);
-}
 
-void MacroExpander::CollectArguments(Frame& frame, const PPMacro& macro)
-{
-	std::vector<PPToken>& stack = frame.stack;
-	stack.pop_back(); // the `(`
 	frame.arguments.clear();
 	frame.arguments.push_back(Argument());
+	frame.collecting_depth = 0;
+	frame.collecting_head = head;
+	frame.collecting = &macro;
 
-	bool closed = false;
-	unsigned depth = 0;
-	while (!stack.empty())
+	if (!CollectArguments(frame))
+		return false;
+	CompleteInvocation(frame);
+	return true;
+}
+
+bool MacroExpander::CollectArguments(Frame& frame)
+{
+	std::vector<PPToken>& stack = frame.stack;
+	for (;;)
 	{
-		PPToken token = stack.back();
+		if (stack.empty())
+		{
+			if (!Pull(frame))
+			{
+				// Only a sequence that has ended leaves the invocation
+				// unterminated; one that has merely paused is resumed.
+				if (frame.feed != nullptr)
+					return false;
+				throw PreprocessError("unterminated macro invocation");
+			}
+			continue;
+		}
+
+		PPToken token = std::move(stack.back());
 		stack.pop_back();
 		if (token.kind == kPPOpOrPunc)
 		{
 			if (token.spelling == "(")
 			{
-				++depth;
+				++frame.collecting_depth;
 			}
 			else if (token.spelling == ")")
 			{
-				if (depth == 0)
-				{
-					closed = true;
-					break;
-				}
-				--depth;
+				if (frame.collecting_depth == 0)
+					return true;
+				--frame.collecting_depth;
 			}
-			else if (token.spelling == "," && depth == 0)
+			else if (token.spelling == "," && frame.collecting_depth == 0)
 			{
 				frame.arguments.push_back(Argument());
 				continue;
 			}
 		}
-		frame.arguments.back().raw.push_back(token);
+		frame.arguments.back().raw.push_back(std::move(token));
 	}
-	if (!closed)
-		throw PreprocessError("unterminated macro invocation");
+}
+
+void MacroExpander::CompleteInvocation(Frame& frame)
+{
+	const PPMacro& macro = *frame.collecting;
+	frame.collecting = nullptr;
 
 	// The arguments are kept exactly as they were written.  The variadic
 	// argument is the one place the separation after a comma survives into the
@@ -293,30 +375,32 @@ void MacroExpander::CollectArguments(Frame& frame, const PPMacro& macro)
 		throw PreprocessError("wrong number of macro arguments");
 	}
 
-	if (!macro.variadic)
-		return;
-
-	// The variable argument is every argument past the named parameters, joined
-	// back into the one token sequence it was written as.
-	const std::size_t variadic_index = macro.parameters.size();
-	Argument joined;
-	if (frame.arguments.size() > variadic_index)
+	if (macro.variadic)
 	{
-		joined.raw = frame.arguments[variadic_index].raw;
-		for (std::size_t index = variadic_index + 1; index < frame.arguments.size(); ++index)
+		// The variable argument is every argument past the named parameters,
+		// joined back into the one token sequence it was written as.
+		const std::size_t variadic_index = macro.parameters.size();
+		Argument joined;
+		if (frame.arguments.size() > variadic_index)
 		{
-			PPToken comma;
-			comma.spelling = ",";
-			comma.kind = kPPOpOrPunc;
-			comma.file = 0;
-			comma.line = 0;
-			joined.raw.push_back(comma);
-			joined.raw.insert(joined.raw.end(), frame.arguments[index].raw.begin(),
-			                  frame.arguments[index].raw.end());
+			joined.raw = frame.arguments[variadic_index].raw;
+			for (std::size_t index = variadic_index + 1; index < frame.arguments.size(); ++index)
+			{
+				PPToken comma;
+				comma.spelling = ",";
+				comma.kind = kPPOpOrPunc;
+				comma.file = 0;
+				comma.line = 0;
+				joined.raw.push_back(comma);
+				joined.raw.insert(joined.raw.end(), frame.arguments[index].raw.begin(),
+				                  frame.arguments[index].raw.end());
+			}
 		}
+		frame.arguments.resize(variadic_index);
+		frame.arguments.push_back(joined);
 	}
-	frame.arguments.resize(variadic_index);
-	frame.arguments.push_back(joined);
+
+	Substitute(frame, macro, frame.collecting_head);
 }
 
 const std::vector<PPToken>& MacroExpander::PaintedArgument(
@@ -565,9 +649,9 @@ void MacroExpander::Substitute(Frame& frame, const PPMacro& macro, const PPToken
 	}
 
 	// The replacement is examined again before the tokens that followed the
-	// invocation, so it goes back on the same stack, deepest token first.
+	// invocation, so it goes on the top of the stack, deepest token first.
 	for (std::size_t index = replaced.size(); index > 0; --index)
-		frame.stack.push_back(replaced[index - 1]);
+		frame.stack.push_back(std::move(replaced[index - 1]));
 }
 
 } // namespace preprocess
