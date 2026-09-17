@@ -149,8 +149,10 @@ Constant Analyzer::EvaluateLiteral(int node)
 		base = 2;
 		start = 2;
 	}
-	else if(text.size() > 1 && text[0] == '0')
+	else if(text.size() > 1 && text[0] == '0' && text[1] >= '0' && text[1] <= '7')
 	{
+		// 2.14.2: only a digit after the leading zero makes the literal octal.
+		// `0u`, `0L` and `0` itself are decimal zero.
 		base = 8;
 		start = 1;
 	}
@@ -290,6 +292,13 @@ Constant Analyzer::EvaluateBinary(int node, int scope, const string& op)
 	if(!left.valid || !right.valid)
 	{
 		return result;
+	}
+	// 5.18/1: a comma expression's value is its right operand, and the left one
+	// is evaluated and discarded - so `(1, 2)` is a constant while `(1/0, 2)`
+	// is not, because the discarded operand is still evaluated.
+	if(op == ",")
+	{
+		return right;
 	}
 	const long long a = left.value;
 	const long long b = right.value;

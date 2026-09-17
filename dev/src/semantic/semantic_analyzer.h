@@ -117,7 +117,7 @@ private:
 	// --- declarations -----------------------------------------------------
 	void AnalyzeDeclaration(int node, int scope, int enclosing_class);
 	void AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class);
-	void AnalyzeFunctionDefinition(int node, int scope, int enclosing_class, bool defer);
+	void AnalyzeFunctionDefinition(int node, int scope, bool defer);
 	void AnalyzeNamespaceDefinition(int node, int scope);
 	void AnalyzeNamespaceAlias(int node, int scope);
 	void AnalyzeUsingDirective(int node, int scope);
@@ -131,18 +131,18 @@ private:
 	void AnalyzeSpecialMember(int node, int scope, int enclosing_class);
 
 	// --- specifiers and declarators --------------------------------------
-	void AnalyzeSpecifiers(int node, int scope, int enclosing_class, Specifiers& out,
+	void AnalyzeSpecifiers(int node, int scope, Specifiers& out,
 	                       const std::string& declared_name, bool declare_introduced);
 	int BuildDeclarator(int node, int base, int scope);
 	int BuildParameterClause(int node, int scope, std::vector<int>& params, bool& varargs,
 	                         std::vector<std::pair<std::string, int> >* names);
-	int BuildSuffix(int node, int base, int scope);
+	int BuildSuffix(int node, int base, int scope, int quals, int func_ref);
 	void CollectDeclaratorName(int node, std::string& name);
 	void SplitQualifiedName(const std::string& text, std::string& qualifier, std::string& name);
 
 	// --- classes, enums, scopes ------------------------------------------
-	int AnalyzeClassSpecifier(int node, int scope, int enclosing_class,
-	                          const std::string& declared_name, bool is_static, int* out_key);
+	int AnalyzeClassSpecifier(int node, int scope, const std::string& declared_name,
+	                          bool is_static, int* out_key);
 	int AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	                         const std::string& declared_name, int* out_key);
 	int DeclareClass(int scope, const std::string& written, int key, bool has_body);
@@ -155,6 +155,9 @@ private:
 
 	// --- statements -------------------------------------------------------
 	void AnalyzeCompoundStatement(int node, int scope);
+	void AnalyzeStatements(int node, int block);
+	void AnalyzeSubstatement(int node, int slot);
+	void AnalyzeSlotStatement(int node, int slot);
 	void ScanCalls(int node, int scope);
 	void NoteClassCall(int node, int scope);
 	void AnalyzeStatement(int node, int scope);
@@ -169,6 +172,8 @@ private:
 	int EntityType(int entity) const;
 	int FindOrCreateObject(int scope, const std::string& name, int type);
 	int FindOrCreateFunction(int scope, const std::string& name, int type);
+	void CheckFunctionQualifiers(int scope, int type);
+	void NoteFunctionDefinition(int entity, const std::string& name);
 
 	// --- constants --------------------------------------------------------
 	Constant Evaluate(int node, int scope);

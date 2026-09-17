@@ -89,9 +89,12 @@ struct Type
 	long long bound;
 
 	// A function's parameter types, in source order, plus whether the list ends
-	// in `...`.
+	// in `...`.  A member function's cv-qualifiers live in `quals` and its
+	// ref-qualifier in `func_ref`, because 8.3.5/6 makes both part of the
+	// function type.
 	std::vector<int> params;
 	bool varargs;
+	int func_ref;
 
 	// A class, enumeration or template parameter's name, and its key.
 	std::string name;
@@ -114,6 +117,7 @@ struct Type
 		, quals(0)
 		, bound(kUnknownBound)
 		, varargs(false)
+		, func_ref(0)
 		, class_key(kClassKeyClass)
 		, enum_key(kEnumKeyPlain)
 		, complete(false)
@@ -236,6 +240,14 @@ struct Scope
 	std::vector<Binding> bindings;
 	std::vector<int> children;
 
+	// A class's own non-static data members, in declaration order, as the
+	// entity each declared.  This is the layout order 9.2 asks for, kept apart
+	// from `bindings` because the two are not the same list: a static member is
+	// a declaration line but not part of the object (9.4.2/1), and an anonymous
+	// union is one member (9.5/1) whose own members are also names in this
+	// scope (9.5/3).
+	std::vector<int> members;
+
 	// Lookup: the last entity each spelling denotes in this scope, kept apart
 	// by category so a namespace-only context is not hidden by a value name
 	// (N3485 3.4.3).
@@ -295,7 +307,8 @@ public:
 	int LvalueReference(int base);
 	int RvalueReference(int base);
 	int Array(long long bound, int element);
-	int Function(int result, const std::vector<int>& params, bool varargs);
+	int Function(int result, const std::vector<int>& params, bool varargs,
+	             int quals = 0, int func_ref = 0);
 	int NewClass(const std::string& name, int key);
 	int NewEnum(const std::string& name, int key);
 	int NewTemplateParameter(const std::string& name, bool template_parameter);
@@ -316,7 +329,21 @@ public:
 	// Whether two types are the same type, and the signature comparison that
 	// applies parameter adjustment (8.3.5).
 	bool Same(int left, int right) const;
+
+	// 1.3.20: a function's signature is its adjusted parameter-type-list, its
+	// `...`, and - for a member function - its cv-qualifiers and ref-qualifier.
+	// The return type is not part of it, so `int f() const` and `int f()`
+	// overload each other while `int f(int)` and `long f(int)` do not.
 	bool SameSignature(int left, int right);
+
+	// 13.1/3: two declarations refer to the same function when their signatures
+	// and their return types agree.  A different parameter list is an overload,
+	// which PA6 accepts; one signature with two return types is ill formed.
+	bool SameFunctionType(int left, int right);
+
+	// 13.1/2: member functions with one parameter-type-list cannot be
+	// overloaded when some of them have a ref-qualifier and the rest do not.
+	bool MixedRefQualifier(int left, int right);
 
 	// 8.3.5/5: the type a parameter takes in a signature, which is what makes
 	// `void f(int)` and `void f(int[3])` one function.
@@ -330,6 +357,9 @@ public:
 private:
 	bool ClassLayout(int id, unsigned long long& size, unsigned long long& align,
 	                 int depth) const;
+	// The size and alignment an object of this type occupies as a class member.
+	bool ObjectLayout(int id, unsigned long long& size, unsigned long long& align,
+	                  int depth) const;
 
 public:
 

@@ -76,7 +76,8 @@ string StructuralKey(const Type& type)
 		{
 			key << type.params[index] << ',';
 		}
-		key << (type.varargs ? "..." : "") << ')';
+		key << (type.varargs ? "..." : "") << "):" << type.quals << ':'
+		    << type.func_ref;
 		break;
 	default:
 		break;
@@ -218,6 +219,16 @@ int Model::RvalueReference(int base)
 
 int Model::Array(long long bound, int element)
 {
+	// 8.3.4/1: the element type of an array shall not be `void`, a reference or
+	// a function type, so the invariant is enforced where an array is formed.
+	// A cv-qualified `void` is not the same type and is not rejected here.
+	const Type& base = Get(element);
+	if(base.kind == kTypeLvalueReference || base.kind == kTypeRvalueReference ||
+	   base.kind == kTypeFunction ||
+	   (base.kind == kTypeFundamental && base.base == posttoken::FT_VOID))
+	{
+		throw SemanticError("an array cannot have this element type");
+	}
 	Type type;
 	type.kind = kTypeArray;
 	type.bound = bound;
@@ -225,13 +236,16 @@ int Model::Array(long long bound, int element)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::Function(int result, const vector<int>& params, bool varargs)
+int Model::Function(int result, const vector<int>& params, bool varargs, int quals,
+                    int func_ref)
 {
 	Type type;
 	type.kind = kTypeFunction;
 	type.base = result;
 	type.params = params;
 	type.varargs = varargs;
+	type.quals = quals;
+	type.func_ref = func_ref;
 	return InternType(StructuralKey(type), type);
 }
 
@@ -308,7 +322,30 @@ string Model::Spelling(int id) const
 			}
 			text += "...";
 		}
-		text += ") returning ";
+		text += ')';
+		// 8.3.5/6, 8.3.5/7: a member function's cv-qualifiers and
+		// ref-qualifier follow its parameter list in the type's spelling.
+		if(type.quals == 3)
+		{
+			text += " const volatile";
+		}
+		else if(type.quals == 1)
+		{
+			text += " const";
+		}
+		else if(type.quals == 2)
+		{
+			text += " volatile";
+		}
+		if(type.func_ref == 1)
+		{
+			text += " &";
+		}
+		else if(type.func_ref == 2)
+		{
+			text += " &&";
+		}
+		text += " returning ";
 		text += Spelling(type.base);
 		return text;
 	}
@@ -351,11 +388,55 @@ bool Model::SameSignature(int left, int right)
 	// type and the table does not hold references across that.
 	const Type a = Get(left);
 	const Type b = Get(right);
-	if(a.kind != b.kind || a.kind != kTypeFunction)
+	if(a.kind != kTypeFunction || b.kind != kTypeFunction)
 	{
 		return false;
 	}
-	if(a.base != b.base || a.varargs != b.varargs || a.params.size() != b.params.size())
+	if(a.varargs != b.varargs || a.quals != b.quals || a.func_ref != b.func_ref ||
+	   a.params.size() != b.params.size())
+	{
+		return false;
+	}
+	for(size_t index = 0; index < a.params.size(); ++index)
+	{
+		if(AdjustParameter(a.params[index]) != AdjustParameter(b.params[index]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool Model::SameFunctionType(int left, int right)
+{
+	if(left == right)
+	{
+		return true;
+	}
+	const Type a = Get(left);
+	const Type b = Get(right);
+	if(a.kind != kTypeFunction || b.kind != kTypeFunction)
+	{
+		return false;
+	}
+	return a.base == b.base && SameSignature(left, right);
+}
+
+// 13.1/2: a member overload set with one parameter-type-list cannot mix
+// declarations that carry a ref-qualifier with ones that do not.
+bool Model::MixedRefQualifier(int left, int right)
+{
+	const Type a = Get(left);
+	const Type b = Get(right);
+	if(a.kind != kTypeFunction || b.kind != kTypeFunction)
+	{
+		return false;
+	}
+	if((a.func_ref != 0) == (b.func_ref != 0))
+	{
+		return false;
+	}
+	if(a.varargs != b.varargs || a.params.size() != b.params.size())
 	{
 		return false;
 	}
@@ -381,10 +462,12 @@ bool Model::SizeOf(int id, unsigned long long& size) const
 	case kTypeCv:
 		return SizeOf(type.base, size);
 	case kTypePointer:
-	case kTypeLvalueReference:
-	case kTypeRvalueReference:
 		size = 8;
 		return true;
+	case kTypeLvalueReference:
+	case kTypeRvalueReference:
+		// 5.3.3/2: the size of a reference is the size of the type it refers to.
+		return SizeOf(type.base, size);
 	case kTypeEnum:
 		// 7.2/2: a fixed underlying type decides the size; an enumeration
 		// without one takes the type its values need, which the course ABI
@@ -419,10 +502,12 @@ bool Model::SizeOf(int id, unsigned long long& size) const
 	}
 }
 
-// 9.2 [class.mem]: the members are laid out in declaration order, each at its
-// own alignment, and the class takes the largest member alignment.  An empty
-// class still occupies one byte (5.3.3/2).  A class that reaches itself - only
-// possible through a definition that is not yet complete - has no layout.
+// 9.2 [class.mem]: a class's data members are laid out in declaration order,
+// each at its own alignment, and the class takes the largest member alignment.
+// 9.5/1: every member of a union is at offset zero, so a union is as large as
+// its largest member.  An empty class still occupies one byte (5.3.3/2).  A
+// class that reaches itself - only possible through a definition that is not
+// yet complete - has no layout.
 bool Model::ClassLayout(int id, unsigned long long& size, unsigned long long& align,
                         int depth) const
 {
@@ -431,27 +516,16 @@ bool Model::ClassLayout(int id, unsigned long long& size, unsigned long long& al
 	{
 		return false;
 	}
+	const bool is_union = type.class_key == kClassKeyUnion;
 	const Scope& scope = ScopeOf(type.decl_scope);
 	unsigned long long total = 0;
 	unsigned long long widest = 1;
-	for(size_t index = 0; index < scope.bindings.size(); ++index)
+	for(size_t index = 0; index < scope.members.size(); ++index)
 	{
-		const Binding& member = scope.bindings[index];
-		if(member.kind != kBindingVariable)
-		{
-			continue;
-		}
-		const int member_type = EntityOf(member.entity).type;
+		const int member_type = EntityOf(scope.members[index]).type;
 		unsigned long long member_size = 0;
 		unsigned long long member_align = 0;
-		if(Get(member_type).kind == kTypeClass)
-		{
-			if(!ClassLayout(member_type, member_size, member_align, depth + 1))
-			{
-				return false;
-			}
-		}
-		else if(!SizeOf(member_type, member_size) || !AlignOf(member_type, member_align))
+		if(!ObjectLayout(member_type, member_size, member_align, depth))
 		{
 			return false;
 		}
@@ -459,8 +533,18 @@ bool Model::ClassLayout(int id, unsigned long long& size, unsigned long long& al
 		{
 			member_align = 1;
 		}
-		total = (total + member_align - 1) / member_align * member_align;
-		total += member_size;
+		if(is_union)
+		{
+			if(member_size > total)
+			{
+				total = member_size;
+			}
+		}
+		else
+		{
+			total = (total + member_align - 1) / member_align * member_align;
+			total += member_size;
+		}
 		if(member_align > widest)
 		{
 			widest = member_align;
@@ -475,6 +559,27 @@ bool Model::ClassLayout(int id, unsigned long long& size, unsigned long long& al
 	return true;
 }
 
+// The size and alignment an object of this type occupies as a class member.
+// A reference is a pointer-sized object there (3.9/8), while `sizeof` applied
+// to a reference type names its referent (5.3.3/2): two different questions,
+// which is why this is not `SizeOf`.
+bool Model::ObjectLayout(int id, unsigned long long& size, unsigned long long& align,
+                         int depth) const
+{
+	const Type& type = Get(id);
+	if(type.kind == kTypeLvalueReference || type.kind == kTypeRvalueReference)
+	{
+		size = 8;
+		align = 8;
+		return true;
+	}
+	if(type.kind == kTypeClass)
+	{
+		return ClassLayout(id, size, align, depth + 1);
+	}
+	return SizeOf(id, size) && AlignOf(id, align);
+}
+
 bool Model::AlignOf(int id, unsigned long long& align) const
 {
 	const Type& type = Get(id);
@@ -487,10 +592,13 @@ bool Model::AlignOf(int id, unsigned long long& align) const
 	case kTypeCv:
 		return AlignOf(type.base, align);
 	case kTypePointer:
-	case kTypeLvalueReference:
-	case kTypeRvalueReference:
 		align = 8;
 		return true;
+	case kTypeLvalueReference:
+	case kTypeRvalueReference:
+		// 5.3.6/1 with 5.3.3/2: a reference takes the alignment of the type it
+		// refers to.
+		return AlignOf(type.base, align);
 	case kTypeEnum:
 		if(type.underlying >= 0)
 		{
@@ -726,9 +834,14 @@ int Model::LookupValueUnqualified(int scope, const string& name) const
 
 int Model::LookupNamespaceUnqualified(int scope, const string& name) const
 {
+	// 7.3.4/2: a using-directive makes the nominated namespace's names appear as
+	// if they were declared in the nearest enclosing namespace, so a namespace
+	// named only through one is still a namespace target.  Inline namespaces
+	// follow the same rule (7.3.1/8).
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
 	{
-		const int found = LookupInCategory(current, name, kLookupNamespace);
+		vector<int> visited;
+		const int found = LookupThrough(current, name, kLookupNamespace, visited);
 		if(found >= 0)
 		{
 			return found;

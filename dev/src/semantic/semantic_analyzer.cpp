@@ -124,7 +124,7 @@ void Analyzer::AnalyzeDeclaration(int node, int scope, int enclosing_class)
 	}
 	else if(tag == "function-definition")
 	{
-		AnalyzeFunctionDefinition(node, scope, enclosing_class, enclosing_class >= 0);
+		AnalyzeFunctionDefinition(node, scope, enclosing_class >= 0);
 	}
 	else if(tag == "namespace-definition")
 	{
@@ -165,7 +165,7 @@ void Analyzer::AnalyzeDeclaration(int node, int scope, int enclosing_class)
 	else if(tag == "class-specifier")
 	{
 		int key = kClassKeyClass;
-		AnalyzeClassSpecifier(node, scope, enclosing_class, string(), false, &key);
+		AnalyzeClassSpecifier(node, scope, string(), false, &key);
 	}
 	else if(tag == "enum-specifier")
 	{

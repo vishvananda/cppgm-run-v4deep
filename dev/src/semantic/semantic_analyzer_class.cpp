@@ -106,12 +106,51 @@ int Analyzer::FindOrCreateFunction(int scope, const string& name, int type)
 	const int found = model_.LookupValue(scope, name);
 	if(found >= 0 && model_.EntityOf(found).kind == kEntityFunction)
 	{
+		// 13.1/3: a later declaration of one function must agree with it.  A
+		// different parameter list or a different cv- or ref-qualifier is an
+		// overload, which PA6 accepts; one signature with two return types is
+		// ill formed.
+		const int previous = model_.EntityOf(found).type;
+		if(model_.MixedRefQualifier(previous, type))
+		{
+			throw SemanticError("member overload set mixes ref-qualified and unqualified `" +
+			                    name + "`");
+		}
+		if(model_.SameSignature(previous, type) && !model_.SameFunctionType(previous, type))
+		{
+			throw SemanticError("conflicting function return type for `" + name + "`");
+		}
 		return found;
 	}
 	const int entity = model_.NewEntity(kEntityFunction, name);
 	model_.EntityOf(entity).type = type;
 	model_.BindValue(scope, name, entity);
 	return entity;
+}
+
+// 8.3.5/6: a ref-qualifier makes a function a member function, so it cannot be
+// written on a function that is not one.
+void Analyzer::CheckFunctionQualifiers(int scope, int type)
+{
+	if(model_.Get(type).kind != kTypeFunction || model_.Get(type).func_ref == 0)
+	{
+		return;
+	}
+	if(model_.ScopeOf(scope).kind == kScopeClass)
+	{
+		return;
+	}
+	throw SemanticError("ref-qualifier requires an ordinary non-static member function");
+}
+
+// 3.2/1: a function may be defined only once in a translation unit.
+void Analyzer::NoteFunctionDefinition(int entity, const string& name)
+{
+	if(model_.EntityOf(entity).body >= 0)
+	{
+		throw SemanticError("duplicate function definition of `" + name + "`");
+	}
+	model_.EntityOf(entity).body = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,45 +258,62 @@ int Analyzer::DeclareClass(int scope, const string& written, int key, bool has_b
 	return entity;
 }
 
-int Analyzer::AnalyzeClassSpecifier(int node, int scope, int enclosing_class,
-                                    const string& declared_name, bool is_static, int* out_key)
+int Analyzer::AnalyzeClassSpecifier(int node, int scope, const string& declared_name,
+                                    bool is_static, int* out_key)
 {
 	const int key_node = FindChild(node, "class-key");
 	const int key = key_node >= 0 ? ClassKeyOf(AfterColon(Label(key_node))) : kClassKeyClass;
-	const bool anonymous = Label(node).empty();
-	// 9.5/2: an unnamed union at namespace scope is a member of that namespace
-	// only when it is `static`; otherwise it would have no linkage at all.
-	if(anonymous && key == kClassKeyUnion && !is_static &&
+	// 9.5/1: `union { ... } ;` with no declarator is an anonymous union, whose
+	// members are names in the enclosing scope (9.5/3) and which at namespace
+	// scope must be static (9.5/2) or it would have no linkage at all.
+	// `union { ... } u;` declares the object `u` of an unnamed union type and
+	// is neither: it injects nothing and needs no `static`.
+	const bool anonymous_member = Label(node).empty() && declared_name.empty();
+	if(anonymous_member && key == kClassKeyUnion && !is_static &&
 	   model_.ScopeOf(scope).kind == kScopeNamespace)
 	{
 		throw SemanticError("an anonymous union at namespace scope must be static");
 	}
+	// A declarator gives its type a name only where that name can be used.  A
+	// class member's declarator names the object, not the type, so an unnamed
+	// class-specifier in a class body keeps its synthetic name and binds
+	// nothing.
+	const bool member = model_.ScopeOf(scope).kind == kScopeClass;
+	const bool names_the_type =
+	    !Label(node).empty() || (!declared_name.empty() && !member);
 	string written = Label(node);
 	if(written.empty())
 	{
-		written = declared_name.empty() ? AnonymousClassName(node) : declared_name;
+		written = names_the_type ? declared_name : AnonymousClassName(node);
 	}
 	const int entity = DeclareClass(scope, written, key, true);
 	if(model_.Get(model_.EntityOf(entity).type).complete)
 	{
 		throw SemanticError("redefinition of `" + written + "`");
 	}
+	// 9.2/2: the class name is declared at the class-head, before the body is
+	// read, so a declaration the body makes is a later one.
+	if(names_the_type)
+	{
+		AddTypeBinding(scope, written, entity, key, -1);
+	}
 	const int class_scope = model_.ScopeFor(scope, entity, kScopeClass, written);
 	ProcessClassBody(node, class_scope);
 	// 9.4/1: the class is complete at the closing brace, so a member body may
 	// name a member declared later in it.
 	model_.Get(model_.EntityOf(entity).type).complete = true;
-	// An anonymous class that no declaration names keeps its synthetic name for
-	// its own scope only; nothing binds it.
-	if(!anonymous || !declared_name.empty())
-	{
-		AddTypeBinding(scope, written, entity, key, -1);
-	}
-	if(anonymous && key == kClassKeyUnion)
+	if(anonymous_member && key == kClassKeyUnion)
 	{
 		// 9.5/3: an anonymous union's members are injected into the scope that
 		// contains it, so `t` names the member without a member access.
 		InjectUnionMembers(class_scope, scope);
+		if(member)
+		{
+			// The union is one member of the class that contains it (9.5/1),
+			// laid out where it was written; its own members are not members of
+			// that class as well.
+			model_.ScopeOf(scope).members.push_back(entity);
+		}
 	}
 	if(out_key != 0)
 	{
@@ -371,11 +427,16 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	}
 	const bool has_base = base_node >= 0;
 
-	const bool anonymous = Label(node).empty();
+	// As for a class-specifier: an unnamed enumeration takes the name a
+	// declarator outside a class body gives it, while a class member's
+	// declarator names the object and leaves the enumeration unnamed.
+	const bool member = model_.ScopeOf(scope).kind == kScopeClass;
+	const bool names_the_type =
+	    !Label(node).empty() || (!declared_name.empty() && !member);
 	string written = Label(node);
 	if(written.empty())
 	{
-		written = declared_name.empty() ? AnonymousEnumName() : declared_name;
+		written = names_the_type ? declared_name : AnonymousEnumName();
 	}
 	string qualifier;
 	string name;
@@ -402,15 +463,19 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 			entity = -1;
 		}
 	}
+	// 7.2/3: an opaque declaration of an unscoped enumeration needs its
+	// underlying type, because there is no enumerator list to infer one.  A
+	// redeclaration is no different from a first declaration here, and a
+	// specifier that names no enumeration at all is rejected for the same
+	// reason.  An elaborated specifier that only *uses* an existing
+	// enumeration is not a declaration and is left alone.
+	if(!scoped && !has_body && !has_base && (declare || entity < 0))
+	{
+		throw SemanticError("opaque declaration of an unscoped enumeration");
+	}
 	bool created = false;
 	if(entity < 0)
 	{
-		// 7.2/3: an opaque declaration of an unscoped enumeration needs its
-		// underlying type, because there is no enumerator list to infer one.
-		if(!scoped && !has_body && !has_base)
-		{
-			throw SemanticError("opaque declaration of an unscoped enumeration");
-		}
 		entity = model_.NewEntity(kEntityEnum, name);
 		model_.EntityOf(entity).type = model_.NewEnum(name, key);
 		model_.BindType(lookup_scope, name, entity);
@@ -442,9 +507,20 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 
 	if(!qualifier.empty())
 	{
-		// A qualified definition names a member of the scope the qualifier
-		// names, so that scope gets the enumeration's own name and scope, and
-		// the definition registers the qualified name where it is written.
+		// A qualified *definition* - `enum class writer::state : char { ... }` -
+		// names a member of the scope the qualifier names, so that scope gets the
+		// enumeration's own name and scope, and the definition registers the
+		// qualified name where it is written.  An elaborated specifier that only
+		// *uses* the name - `enum S::E *p` - defines nothing and is the
+		// enumeration it found, whose canonical name is its own.
+		if(!declare && !has_body)
+		{
+			if(out_key != 0)
+			{
+				*out_key = key;
+			}
+			return canonical;
+		}
 		if(declare && created)
 		{
 			AddTypeBinding(lookup_scope, name, entity, -1, key);
@@ -471,7 +547,7 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	const int enum_scope = scoped ? model_.ScopeFor(scope, entity, kScopeEnum, written) : scope;
 	// An enumeration binds its name in a scope once: a later declaration of the
 	// same enumeration in the same scope adds no second line.
-	if(declare && created && (!anonymous || !declared_name.empty()))
+	if(declare && created && names_the_type)
 	{
 		AddTypeBinding(scope, written, entity, -1, key);
 	}
@@ -544,7 +620,7 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 	Specifiers spec;
 	if(seq >= 0)
 	{
-		AnalyzeSpecifiers(seq, scope, enclosing_class, spec, declared_name, list < 0);
+		AnalyzeSpecifiers(seq, scope, spec, declared_name, list < 0);
 	}
 	if(!spec.saw_type || list < 0)
 	{
@@ -561,7 +637,11 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 		string qualifier;
 		string name;
 		SplitQualifiedName(full, qualifier, name);
-		const int target = CurrentEntityScope(scope, qualifier);
+		// 11.3/6: a friend function declaration declares the function in the
+		// nearest enclosing namespace, not as a member of the class that grants
+		// the friendship, so the class's own scope does not bind the name.
+		const int target = spec.is_friend ? model_.EnclosingNamespace(scope)
+		                                  : CurrentEntityScope(scope, qualifier);
 		if(!name.empty() && model_.LookupNamespace(target, name) >= 0)
 		{
 			// A name a namespace-definition bound denotes a namespace, and no
@@ -588,6 +668,7 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 		}
 		if(model_.Get(type).kind == kTypeFunction)
 		{
+			CheckFunctionQualifiers(target, type);
 			const int entity = FindOrCreateFunction(target, name, type);
 			Binding binding;
 			binding.kind = kBindingFunction;
@@ -623,6 +704,14 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 		binding.type = type;
 		binding.entity = entity;
 		model_.AddBinding(target, binding);
+		// 9.2: a non-static data member takes part in its class's layout, in
+		// declaration order.  A static or thread-local member is not part of the
+		// object (9.4.2/1), so it is not recorded here.
+		if(model_.ScopeOf(target).kind == kScopeClass && !spec.is_static &&
+		   !spec.is_extern && !spec.is_thread_local && !spec.is_friend)
+		{
+			model_.ScopeOf(target).members.push_back(entity);
+		}
 		if(initializer >= 0)
 		{
 			const Constant value = Evaluate(initializer, scope);
@@ -636,7 +725,7 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 	}
 }
 
-void Analyzer::AnalyzeFunctionDefinition(int node, int scope, int enclosing_class, bool defer)
+void Analyzer::AnalyzeFunctionDefinition(int node, int scope, bool defer)
 {
 	const int seq = FindChild(node, "decl-specifier-seq");
 	const int declarator = FindChild(node, "declarator");
@@ -652,10 +741,21 @@ void Analyzer::AnalyzeFunctionDefinition(int node, int scope, int enclosing_clas
 	Specifiers spec;
 	if(seq >= 0)
 	{
-		AnalyzeSpecifiers(seq, target, enclosing_class, spec, name, false);
+		AnalyzeSpecifiers(seq, target, spec, name, false);
 	}
 	const int type = BuildDeclarator(declarator, spec.type, target);
+	CheckFunctionQualifiers(target, type);
 	const int entity = FindOrCreateFunction(target, name, type);
+	// 9.3.2/2: a definition written outside its class must match the member the
+	// class declared.  A ref-qualifier is what tells two such members apart
+	// (9.3.1/3), so a definition that writes one must find it declared; the
+	// other half of the rule - a cv-qualifier that differs - is left to the
+	// overload resolution PA6 does not model.
+	if(!qualifier.empty() && model_.Get(type).func_ref != 0 &&
+	   model_.Get(model_.EntityOf(entity).type).func_ref != model_.Get(type).func_ref)
+	{
+		throw SemanticError("ref-qualifier requires an ordinary non-static member function");
+	}
 	Binding binding;
 	binding.kind = kBindingFunction;
 	binding.name = name;
@@ -666,6 +766,7 @@ void Analyzer::AnalyzeFunctionDefinition(int node, int scope, int enclosing_clas
 	{
 		return;
 	}
+	NoteFunctionDefinition(entity, name);
 	vector<int> params;
 	bool varargs = false;
 	vector<pair<string, int> > names;
@@ -688,35 +789,43 @@ void Analyzer::AnalyzeSpecialMember(int node, int scope, int enclosing_class)
 {
 	const int declarator = FindChild(node, "declarator");
 	const int body = FindChild(node, "compound-statement");
-	const int type = BuildDeclarator(declarator, model_.Fundamental(posttoken::FT_VOID), scope);
+	string full;
+	CollectDeclaratorName(declarator, full);
+	string qualifier;
 	string name;
-	CollectDeclaratorName(declarator, name);
-	const int entity = FindOrCreateFunction(scope, name, type);
+	SplitQualifiedName(full, qualifier, name);
+	// 9.3.2/2: a constructor or destructor defined outside its class names the
+	// member in the class's own scope, like any other qualified definition, so
+	// `S::S() { }` is the constructor `S` and not a new name at global scope.
+	const int target = CurrentEntityScope(scope, qualifier);
+	const int type = BuildDeclarator(declarator, model_.Fundamental(posttoken::FT_VOID), target);
+	const int entity = FindOrCreateFunction(target, name, type);
 	Binding binding;
 	binding.kind = kBindingFunction;
 	binding.name = name;
 	binding.type = type;
 	binding.entity = entity;
-	model_.AddBinding(scope, binding);
+	model_.AddBinding(target, binding);
 	if(body < 0)
 	{
 		return;
 	}
+	NoteFunctionDefinition(entity, name);
 	vector<int> params;
 	bool varargs = false;
 	vector<pair<string, int> > names;
-	BuildParameterClause(FindChild(declarator, "parameter-clause"), scope, params, varargs, &names);
+	BuildParameterClause(FindChild(declarator, "parameter-clause"), target, params, varargs, &names);
 	if(enclosing_class >= 0)
 	{
 		PendingBody record;
-		record.owner = scope;
+		record.owner = target;
 		record.name = name;
 		record.parameters = names;
 		record.body = body;
 		pending_.push_back(record);
 		return;
 	}
-	OpenFunctionScope(scope, name, names, body);
+	OpenFunctionScope(target, name, names, body);
 }
 
 void Analyzer::AnalyzeBitField(int node, int scope)
@@ -731,7 +840,7 @@ void Analyzer::AnalyzeBitField(int node, int scope)
 	const int seq = FindChild(node, "decl-specifier-seq");
 	if(seq >= 0)
 	{
-		AnalyzeSpecifiers(seq, scope, -1, spec, string(), false);
+		AnalyzeSpecifiers(seq, scope, spec, string(), false);
 	}
 	const int type = BuildDeclarator(declarator, spec.type, scope);
 	string name;
@@ -743,6 +852,10 @@ void Analyzer::AnalyzeBitField(int node, int scope)
 	binding.type = type;
 	binding.entity = entity;
 	model_.AddBinding(scope, binding);
+	if(model_.ScopeOf(scope).kind == kScopeClass)
+	{
+		model_.ScopeOf(scope).members.push_back(entity);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -763,9 +876,32 @@ bool Analyzer::IsStatementTag(const string& tag) const
 	       tag == "then" || tag == "else" || tag == "function-try-block";
 }
 
+// Whether a child of `node` is the substatement position that gets a scope of
+// its own: the `then` and `else` of an `if`, and the body of a loop or switch.
+bool IsSubstatement(const string& parent, const string& child)
+{
+	if(parent == "if-statement")
+	{
+		return child == "then" || child == "else";
+	}
+	if(parent == "while-statement" || parent == "for-statement" ||
+	   parent == "do-statement" || parent == "switch-statement")
+	{
+		return child != "condition" && child != "for-init-statement" &&
+		       child != "iteration";
+	}
+	return false;
+}
+
 void Analyzer::AnalyzeCompoundStatement(int node, int scope)
 {
-	const int block = model_.NewScope(kScopeBlock, "", scope);
+	AnalyzeStatements(node, model_.NewScope(kScopeBlock, "", scope));
+}
+
+// The contents of one block scope: declarations bind in it and statements are
+// analysed in it.
+void Analyzer::AnalyzeStatements(int node, int block)
+{
 	const vector<int> children = ChildrenOf(node);
 	for(size_t index = 0; index < children.size(); ++index)
 	{
@@ -784,6 +920,44 @@ void Analyzer::AnalyzeCompoundStatement(int node, int scope)
 			AnalyzeStatement(child, block);
 		}
 		ScanCalls(child, block);
+	}
+}
+
+// One statement written in the substatement position of a selection or
+// iteration statement.  The position is one scope: a body written as a compound
+// or as a single declaration is the contents of that scope, while a nested
+// selection or iteration opens a scope of its own inside it.
+void Analyzer::AnalyzeSlotStatement(int node, int slot)
+{
+	const string& tag = Tag(node);
+	if(IsDeclarationTag(tag))
+	{
+		AnalyzeDeclaration(node, slot, -1);
+	}
+	else if(tag == "compound-statement")
+	{
+		AnalyzeStatements(node, slot);
+	}
+	else if(IsStatementTag(tag))
+	{
+		AnalyzeStatement(node, slot);
+	}
+	ScanCalls(node, slot);
+}
+
+void Analyzer::AnalyzeSubstatement(int node, int slot)
+{
+	// An `if` wraps each of its two substatements in a `then` or an `else`
+	// node; every other substatement position holds the statement itself.
+	if(!IsTag(node, "then") && !IsTag(node, "else"))
+	{
+		AnalyzeSlotStatement(node, slot);
+		return;
+	}
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
+	{
+		AnalyzeSlotStatement(children[index], slot);
 	}
 }
 
@@ -854,23 +1028,39 @@ void Analyzer::NoteClassCall(int node, int scope)
 
 void Analyzer::AnalyzeStatement(int node, int scope)
 {
-	if(IsTag(node, "compound-statement"))
+	const string& tag = Tag(node);
+	if(tag == "compound-statement")
 	{
 		AnalyzeCompoundStatement(node, scope);
 		return;
 	}
+	// 6.4/3 and 6.5.3/1: a selection or iteration statement's substatement is
+	// in a scope that also holds a declaration made in its condition or in its
+	// `for`-init, so the statement owns a block of its own; a declaration in a
+	// `for`-init belongs to the loop and not to the block around it.  A handler
+	// owns one too, so its exception-declaration is scoped to it.
+	const bool owns_scope = tag == "if-statement" || tag == "switch-statement" ||
+	                        tag == "while-statement" || tag == "do-statement" ||
+	                        tag == "for-statement" || tag == "handler";
+	const int inner = owns_scope ? model_.NewScope(kScopeBlock, "", scope) : scope;
 	const vector<int> children = ChildrenOf(node);
 	for(size_t index = 0; index < children.size(); ++index)
 	{
 		const int child = children[index];
-		const string& tag = Tag(child);
-		if(IsDeclarationTag(tag))
+		const string& child_tag = Tag(child);
+		// A body written as a single declaration is still the substatement, so
+		// it is recognised before the declaration it holds.
+		if(IsSubstatement(tag, child_tag))
 		{
-			AnalyzeDeclaration(child, scope, -1);
+			AnalyzeSubstatement(child, model_.NewScope(kScopeBlock, "", inner));
 		}
-		else if(IsStatementTag(tag))
+		else if(IsDeclarationTag(child_tag))
 		{
-			AnalyzeStatement(child, scope);
+			AnalyzeDeclaration(child, inner, -1);
+		}
+		else if(IsStatementTag(child_tag))
+		{
+			AnalyzeStatement(child, inner);
 		}
 	}
 }

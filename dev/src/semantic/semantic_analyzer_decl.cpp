@@ -83,6 +83,25 @@ string AfterColon(const string& text)
 	return colon == string::npos ? string() : text.substr(colon + 1);
 }
 
+// The token a labelled terminal node carries.  A keyword or punctuator token
+// is labelled `KW_CONST:const` or `OP_LAND:&&`, so its word follows the colon;
+// a node the parser named itself carries the spelling alone, as
+// `ref-qualifier` does with `&&`.
+string TerminalWord(const string& label)
+{
+	const size_t colon = label.find(':');
+	return colon == string::npos ? label : label.substr(colon + 1);
+}
+
+// Whether a decl-specifier is a `decltype(...)`.  The parser keeps that form as
+// one node that holds the operand as its child, while every other decl-specifier
+// is a single token - so a type whose *name* merely begins with `decltype` is an
+// ordinary name and not a specifier to evaluate.
+bool IsDecltypeSpecifier(const syntax::SyntaxArena& arena, int node)
+{
+	return arena.ChildCount(node) > 0;
+}
+
 // Whether a decl-specifier word names a type, which is what makes a class or
 // enum specifier beside it the declaration's type or an intermediate one.
 bool IsSimpleTypeWord(const string& word)
@@ -275,7 +294,7 @@ int Analyzer::FundamentalFromSpecifiers(const vector<string>& words) const
 	return unsigned_seen ? posttoken::FT_UNSIGNED_INT : posttoken::FT_INT;
 }
 
-void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Specifiers& out,
+void Analyzer::AnalyzeSpecifiers(int node, int scope, Specifiers& out,
                                  const string& declared_name, bool declare_introduced)
 {
 	vector<string> words;
@@ -301,8 +320,7 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Speci
 		if(tag == "decl-specifier" || tag == "type-specifier" || tag == "cv-qualifier")
 		{
 			const string word = KeywordWord(Label(child));
-			if((word.empty() && NameText(Label(child)).compare(0, 8, "decltype") == 0) ||
-			   IsSimpleTypeWord(word))
+			if((word.empty() && IsDecltypeSpecifier(arena_, child)) || IsSimpleTypeWord(word))
 			{
 				last_type = index;
 			}
@@ -320,7 +338,7 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Speci
 			if(word.empty())
 			{
 				// A name, or a `decltype(...)` the specifier keeps whole.
-				if(NameText(label).compare(0, 8, "decltype") == 0)
+				if(IsDecltypeSpecifier(arena_, child))
 				{
 					named_type = EvaluateDecltype(child, scope);
 				}
@@ -409,7 +427,7 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Speci
 		if(tag == "class-specifier")
 		{
 			int key = kClassKeyClass;
-			named_type = AnalyzeClassSpecifier(child, scope, enclosing_class,
+			named_type = AnalyzeClassSpecifier(child, scope,
 			                                   index == last_type ? declared_name : string(),
 			                                   out.is_static, &key);
 			out.class_specifier = child;
@@ -455,7 +473,7 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	if(tag == "type-id")
 	{
 		Specifiers spec;
-		AnalyzeSpecifiers(ChildAt(node, 0), scope, -1, spec, string(), false);
+		AnalyzeSpecifiers(ChildAt(node, 0), scope, spec, string(), false);
 		const int abstract = ChildAt(node, 1);
 		return abstract < 0 ? spec.type : BuildDeclarator(abstract, spec.type, scope);
 	}
@@ -475,7 +493,13 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	vector<int> operators;
 	vector<int> operator_quals;
 	vector<int> suffixes;
+	vector<int> suffix_quals;
+	vector<int> suffix_refs;
 	int nested = -1;
+	// Which of the two lists a trailing qualifier belongs to: the last pointer
+	// operator, or the last suffix.  `int *const p` qualifies the pointer, while
+	// `int f() const` qualifies the function (8.3.5/6).
+	bool last_is_suffix = false;
 	const vector<int> children = ChildrenOf(node);
 	for(size_t index = 0; index < children.size(); ++index)
 	{
@@ -483,9 +507,7 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 		const string& child_tag = Tag(child);
 		if(child_tag == "ptr-operator")
 		{
-			const string& label = Label(child);
-			const string spelling = label.compare(0, 3, "OP_") == 0
-			    ? label.substr(label.find(':') + 1) : label;
+			const string spelling = TerminalWord(Label(child));
 			int kind = kTypePointer;
 			if(spelling == "&")
 			{
@@ -497,20 +519,37 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 			}
 			operators.push_back(kind);
 			operator_quals.push_back(0);
+			last_is_suffix = false;
 			continue;
 		}
 		if(child_tag == "cv-qualifier")
 		{
-			if(!operator_quals.empty())
+			const int bit = TerminalWord(Label(child)) == "const" ? 1 : 2;
+			if(last_is_suffix && !suffix_quals.empty())
 			{
-				const string word = AfterColon(Label(child));
-				operator_quals[operator_quals.size() - 1] |= word == "const" ? 1 : 2;
+				suffix_quals[suffix_quals.size() - 1] |= bit;
+			}
+			else if(!operator_quals.empty())
+			{
+				operator_quals[operator_quals.size() - 1] |= bit;
+			}
+			continue;
+		}
+		if(child_tag == "ref-qualifier")
+		{
+			if(!suffix_refs.empty())
+			{
+				suffix_refs[suffix_refs.size() - 1] =
+				    TerminalWord(Label(child)) == "&&" ? 2 : 1;
 			}
 			continue;
 		}
 		if(child_tag == "array-suffix" || child_tag == "parameter-clause")
 		{
 			suffixes.push_back(child);
+			suffix_quals.push_back(0);
+			suffix_refs.push_back(0);
+			last_is_suffix = true;
 			continue;
 		}
 		if(child_tag == "nested-declarator")
@@ -543,7 +582,8 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	}
 	for(size_t index = suffixes.size(); index > 0; --index)
 	{
-		type = BuildSuffix(suffixes[index - 1], type, scope);
+		type = BuildSuffix(suffixes[index - 1], type, scope, suffix_quals[index - 1],
+		                   suffix_refs[index - 1]);
 	}
 	if(nested >= 0)
 	{
@@ -552,7 +592,7 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	return type;
 }
 
-int Analyzer::BuildSuffix(int node, int base, int scope)
+int Analyzer::BuildSuffix(int node, int base, int scope, int quals, int func_ref)
 {
 	if(Tag(node) == "array-suffix")
 	{
@@ -566,7 +606,7 @@ int Analyzer::BuildSuffix(int node, int base, int scope)
 	vector<int> params;
 	bool varargs = false;
 	BuildParameterClause(node, scope, params, varargs, 0);
-	return model_.Function(base, params, varargs);
+	return model_.Function(base, params, varargs, quals, func_ref);
 }
 
 int Analyzer::BuildParameterClause(int node, int scope, vector<int>& params, bool& varargs,
@@ -602,7 +642,7 @@ int Analyzer::BuildParameterClause(int node, int scope, vector<int>& params, boo
 		Specifiers spec;
 		if(seq >= 0)
 		{
-			AnalyzeSpecifiers(seq, scope, -1, spec, string(), false);
+			AnalyzeSpecifiers(seq, scope, spec, string(), false);
 		}
 		// An unnamed parameter's declarator prints as `abstract-declarator` when
 		// it is a suffix form, and it must not silently become the base type.
