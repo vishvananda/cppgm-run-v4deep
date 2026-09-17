@@ -6,16 +6,15 @@
   any stage edit).
 - Last reviewed commit: `91bd3202`.
 - Implementation commits: `2f4e97c4` (parser, arena, dump and driver) and the
-  twenty-nine commits that follow it, up to the handoff commit that last touches
-  this file.
+  thirty-three commits that follow it, up to the handoff commit that last
+  touches this file.
 - Target: `cppgm++ --emit-ast -o <out> <src>...` runs translation phases 1-7
   for each primary source, parses each translation unit with the PA5 syntax
   subset, and writes the deterministic AST dump the checked-in `.ref` files
   define.
-- Progress: **186 / 188** checked-in PA5 tests pass, up from 0 / 188 at the
-  turn's start.  `make test-report-through-pa4` passes 205 / 205 and
-  `perl scripts/cppgm_file_audit.pl --stage pa5 --paths dev/src` reports no
-  issue.
+- Progress: **188 / 188** checked-in PA5 tests pass.  `make
+  test-report-through-pa4` passes 205 / 205 and `perl
+  scripts/cppgm_file_audit.pl --stage pa5 --paths dev/src` reports no issue.
 
 ## Design / spec alignment
 
@@ -36,8 +35,10 @@ file bytes -> TranslatedSource -> PPTokenizer -> PPTokenReader
   label and a child list; tags and labels are interned; the dump is a preorder
   walk with an explicit stack.
 - `syntax/syntax_parser.*` is the parser: the cursor, the name table, node
-  construction and the grammar, in two translation units (declarations/types in
-  `syntax_parser.cpp`, statements/expressions in `syntax_parser_stmt.cpp`).
+  construction and the grammar, in three translation units - declarations,
+  classes and declarators in `syntax_parser.cpp`, statements and expressions in
+  `syntax_parser_stmt.cpp`, and types, names and template arguments in
+  `syntax_parser_type.cpp`.
 - `syntax/syntax_driver.*` is the `--emit-ast` driver.
 - The name-category boundary of `parsing.md` is a scope stack of name facts
   recorded by declarations, with the documented lexical fallback for a name no
@@ -46,9 +47,30 @@ file bytes -> TranslatedSource -> PPTokenizer -> PPTokenReader
 The parser follows the handout's guidance: one function per useful production,
 a structured tree built directly (no recognition tree and no second pass over
 spellings), and speculative alternatives that mark and roll back the cursor,
-the tree, the name table and the angle state together.  The one piece of token
-state the grammar needs - a `>>` whose first `>` a close-angle-bracket has
-taken - is cursor state, so the second half stays the current logical token.
+the tree, the name table, the delimiter count and the angle state together.
+The one piece of token state the grammar needs - a `>>` whose first `>` a
+close-angle-bracket has taken - is cursor state, so the second half stays the
+current logical token.
+
+Two clauses carry most of the ambiguity work, and both are cited where they are
+implemented rather than approximated:
+
+- N3485 14.2/2 makes a name a template-name only where lookup found one, so a
+  qualified name inside a template-argument list that is not one keeps its `<`
+  as the less-than operator.  That is what leaves `ic<bool, R1::num < 2>` its
+  closing `>`; a bare name keeps the course's lexical-fallback speculation,
+  which is what `std::g<int>()` and `B<2>` need.
+- N3485 8.2/7 makes a type-name nested in parentheses in a parameter clause a
+  simple-type-specifier, so `int(value_type)` is a parameter of function type
+  and `( ... )` is that same clause with a pack, since `...` is not a
+  declarator-id.  The node keeps the name the named form gives it, which is why
+  the dump prints `declarator` there and `abstract-declarator` for a keyword
+  type.
+
+A declaration's name is a name of the scope that encloses its template
+parameter clause, not of that clause: a class or alias template is a
+template-name there, which is what makes `B * p;` a declaration after
+`template<class T> struct B {};`.
 
 Names the dump spells as text (an `id-expression`, a `type-name`, a
 `declarator-id`) are composed from the token range they cover: a name's
@@ -58,34 +80,29 @@ would change tokenization, which is why `C::operator=` has no space and
 
 ## Remaining groups
 
-Two fixtures fail, each a corner of the ambiguity machinery rather than a
-missing construct:
+None of the checked-in fixtures fails.  The groups this turn closed, each of
+them an ambiguity corner with a reduced reproducer kept in
+`student.tests/syntax_differential.pl`:
 
-1. `200-qualified-member-comparison-template-arg` - a class head with a
-   template-id base clause whose argument ends in a comparison,
-   `struct ratio_less<R1, R2, true, false> : integral_constant<bool, R1::num <
-   R2::num> {};`.  The reference reads the argument as the template-id
-   `R1::num<R2::num>` and then closes the base clause's list with the second
-   `>`; this parser loses the class body to a failed nested template-id
-   speculation.  Reducer: `template<class T, T V> struct ic {}; template<class
-   R1> struct B : ic<bool, R1::num < 2> {};`.
-2. `200-parenthesized-parameter-name-or-type` - N3485 8.2's
-   `int f(int(value_type))` choice between a parenthesized parameter name and a
-   parameter of function type.  `parsing.md` states the rule (the name category
-   decides) and the category half is clear, but the shapes the reference
-   produces differ in a way the clause does not explain: `int(int)` and
-   `int(...)` print `abstract-declarator`, while `int(value_type)` and
-   `int(CC)` print `declarator` with the same child.  Matching that needs a
-   rename keyed on the *contents* of the sibling parameter clause, which is a
-   reference artifact rather than a rule; it is recorded as a review question
-   below instead of being special-cased.
+1. A relational template argument that needs the enclosing list's `>`: the
+   nested template-id reading of `R1::num < 2` would take it, so a qualified
+   name is held to 14.2/2 inside an argument list while a bare name keeps the
+   speculative reading.
+2. The parameter's parenthesized name against a parameter of function type
+   (8.2/7), including `( ... )` and the pointer operator that a parameter
+   clause holds rather than the abstract declarator around it.
+3. The name table's account of a failed alternative: bindings are undone by
+   identity rather than by trimming a scope's map, which is ordered by name.
+4. A template declaration's name as a name of the enclosing scope, with the
+   template categories of 14.2/2.
+5. The checkpoint's delimiter count, which a half-read parenthesized construct
+   left raised, so a later `>` in an angle list read as an operator.
 
-Earlier groups that this turn finished: the token plumbing and arena; simple
-declarations, declarators and type-ids; namespaces, classes, enums and
-templates; statements and expressions; the declaration/expression, type-id/
-expression and template-id/relational ambiguities; the class-member, special
-member, bit-field and pack forms; and the hosted attribute forms the corpus
-uses.
+Earlier groups: the token plumbing and arena; simple declarations, declarators
+and type-ids; namespaces, classes, enums and templates; statements and
+expressions; the declaration/expression, type-id/expression and
+template-id/relational ambiguities; the class-member, special member, bit-field
+and pack forms; and the hosted attribute forms the corpus uses.
 
 ## Performance evidence
 
@@ -100,25 +117,32 @@ every group repeated, so the run is dominated by the stage's own ambiguity
 work rather than by startup.  The two binaries' dumps are compared byte for
 byte before any timing is accepted.
 
-Committed benchmark, 3 000 groups, 923 664 B of source, a 6 922 324 B dump,
-5 ABBA blocks each arm (20 timed runs per label):
+Benchmark, 3 000 groups, 923 664 B of source, a 6 922 324 B dump, 5 ABBA blocks
+each arm (20 timed runs per label):
 
 | tool | latency (s) | peak RSS (MB) |
 | --- | --- | --- |
-| `cppgm++-ref` | 0.661 [0.655..0.682] | 48.2 [48.2..48.4] |
-| `cppgm++` | 0.443 [0.430..0.645] | 59.1 [59.0..59.2] |
+| `cppgm++-ref` | 0.661 [0.656..0.672] | 48.2 [48.0..48.3] |
+| `cppgm++` | 0.458 [0.452..0.479] | 59.1 [59.0..59.2] |
 
-A/A calibration on the same schedule: paired difference median -0.0086 s, MAD
-0.0086 s, range [-0.0163..+0.0031].  The -0.214 s latency difference is 25x the
-noise floor with 5 of 5 blocks negative, so it is a separable win.  A second
-run of the same protocol before the last three fixes read 0.670 / 0.438 with an
-A/A MAD of 0.0075 s, so the reading is stable across builds.  Peak RSS is
-**not** a win: the tree is a node vector with a `std::vector<int>` child list
-per node, so the compiler holds 59.1 MB against the reference's 48.2 MB on this
-corpus, a 1.23x constant factor.  The identified fix (one arena-backed child
-list with a per-node range, or a reversed linked-list of child indices like the
-reference's edge array) is a representation change, not an asymptotic one, and
-is carried to the audit below.
+A/A calibration on the same schedule: paired difference median -0.0024 s, MAD
+0.0024 s, range [-0.0087..+0.0016].  The -0.207 s latency difference is 86x the
+noise floor with 5 of 5 blocks negative, so it is a separable win.
+
+The 186-fixture compiler of the previous handoff and the 188-fixture compiler
+of this one were both measured on that corpus: 0.441 [0.437..0.447] against
+0.458 [0.452..0.479], so the name table's account of its bindings and the
+delimiter count in the checkpoint cost about 4%.  The first version of the
+binding log filtered the whole log whenever a scope closed; the profiler put
+that at 9.8% of the parse, and cutting the log back to where the closed
+scope's bindings start recovered all but that 4%.
+
+Peak RSS is **not** a win: the tree is a node vector with a `std::vector<int>`
+child list per node, so the compiler holds 59.1 MB against the reference's
+48.2 MB on this corpus, a 1.23x constant factor.  The identified fix (one
+arena-backed child list with a per-node range, or a reversed linked-list of
+child indices like the reference's edge array) is a representation change, not
+an asymptotic one, and is carried to the audit below.
 
 `cppgm++ --emit-ast` has no executable output, so there is no generated-program
 runtime or text size at this stage; the dump's size is reported instead, and no
@@ -127,28 +151,25 @@ telemetry surface is invented to report one.
 ## Validation
 
 - `make test-report-through-pa4` - 205 / 205.
-- `make test-pa5` - 186 / 188 (the two fixtures in "Remaining groups").
+- `make test-pa5` - 188 / 188.
 - `perl scripts/cppgm_file_audit.pl --stage pa5 --paths dev/src` - pass, no
-  warnings (60 files checked).
+  warnings (61 files checked).
 - `student.tests/syntax_benchmark.pl` - dumps byte-identical to the reference;
   latency and peak RSS reported above.
-- Whole-suite runs after each group above; the two remaining failures were
-  reduced to two- to six-line reproducers before being recorded here.
+- `student.tests/syntax_differential.pl` - 20 reduced reproducers of the
+  ambiguity and name-category corners agree with the reference in exit status
+  and dump; one known difference is recorded below.
+- Whole-suite runs after each group above; every failure this turn was reduced
+  to a two- to six-line reproducer before being fixed.
 
 ## Handoff ledger
 
 ### Unfinished implementation
 
-- The two fixture groups in "Remaining groups".  Each is an ambiguity corner
-  with a recorded reducer; neither is a missing construct.  Group 1 is a nested
-  template-id speculation inside a *base clause* that does not restore the
-  angle state when it fails, so the class body is lost; the reducer above is
-  the whole of it.  Group 2 needs the parameter's parenthesized-name-vs-type
-  choice, which `parsing.md` states and which the current
-  `ParameterLikeDeclarator` does not implement; the shape half of it is a
-  review question, not an implementation gap.
-- Whole-stage audit: not run yet.  Nothing here is waived; the failures are
-  listed for the independent audit that follows this handoff.
+- Nothing that a checked-in fixture reaches is unfinished.  The one shape this
+  compiler reads differently from the reference is the known difference below;
+  it is a reference artifact in a region the handout puts outside the required
+  boundary, not a missing construct, and it is recorded rather than waived.
 
 ### Carried to a later stage
 
@@ -164,6 +185,22 @@ telemetry surface is invented to report one.
 
 ### Independent review questions
 
+- **A qualified name in a parameter's parenthesized position**: the reference
+  reads `int q(int(x::C))` - after an earlier parameter has declared `x` a
+  value - as a parameter clause whose parameter is the qualified name, and this
+  compiler reads the same tokens as a declarator.  The two agree until `x` is a
+  known value.  A parameter name may not be qualified, so the input is outside
+  the boundary `parsing.md` states; the reproducer is in
+  `student.tests/syntax_differential.pl` as the one known difference, and the
+  harness reports if it ever goes away.
+- **The template-name category is coarse**: a template declaration's entity is
+  a template-name of the enclosing scope only where the declaration bound it as
+  a type name, so a function template's name takes no category (it was invisible
+  before this turn, and `validate<int>()` still reads as a template-id through
+  the bare-name speculation).  Giving function templates their own category
+  would make `N::f<int>` a template-id inside an argument list; no fixture
+  reaches it, and the token-identity of the two categories is a later stage's
+  question.
 - The dump spells a non-type template parameter's bare default literal as
   `TT_LITERAL:0` when the parameter is one keyword type specifier with no
   declarator, and as `literal 0` otherwise.  The rule matches every case the
