@@ -598,7 +598,7 @@ int Parser::UnaryExpression()
 			return node;
 		}
 		Add(node, UnaryExpression());
-		return node;
+		return PostfixSuffixes(node);
 	}
 	if(kind == posttoken::KW_ALIGNOF || kind == posttoken::KW_TYPEID || kind == posttoken::KW_NOEXCEPT)
 	{
@@ -617,7 +617,7 @@ int Parser::UnaryExpression()
 		}
 		--nested_delim_;
 		Expect(posttoken::OP_RPAREN, "`)`");
-		return node;
+		return PostfixSuffixes(node);
 	}
 	if(IsCastKeywordKind(kind))
 	{
@@ -633,23 +633,23 @@ int Parser::UnaryExpression()
 		Add(node, Expression());
 		--nested_delim_;
 		Expect(posttoken::OP_RPAREN, "`)`");
-		return node;
+		return PostfixSuffixes(node);
 	}
 	if(kind == posttoken::KW_NEW)
 	{
-		return NewExpression();
+		return PostfixSuffixes(NewExpression());
 	}
 	if(kind == posttoken::OP_COLON2 && At(posttoken::KW_NEW, 1))
 	{
-		return NewExpression();
+		return PostfixSuffixes(NewExpression());
 	}
 	if(kind == posttoken::KW_DELETE)
 	{
-		return DeleteExpression();
+		return PostfixSuffixes(DeleteExpression());
 	}
 	if(kind == posttoken::OP_COLON2 && At(posttoken::KW_DELETE, 1))
 	{
-		return DeleteExpression();
+		return PostfixSuffixes(DeleteExpression());
 	}
 	return PostfixExpression();
 }
@@ -714,7 +714,7 @@ int Parser::NewExpression()
 		Add(init, paren);
 		Add(node, init);
 	}
-	return node;
+	return PostfixSuffixes(node);
 }
 
 int Parser::DeleteExpression()
@@ -761,7 +761,11 @@ int Parser::TypeIdOrExpr(bool& is_type)
 
 int Parser::PostfixExpression()
 {
-	int node = PrimaryExpression();
+	return PostfixSuffixes(PrimaryExpression());
+}
+
+int Parser::PostfixSuffixes(int node)
+{
 	for(;;)
 	{
 		const int kind = KindAt();

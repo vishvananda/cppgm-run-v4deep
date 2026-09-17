@@ -233,6 +233,7 @@ private:
 	int BinaryExpression(int level);
 	int UnaryExpression();
 	int PostfixExpression();
+	int PostfixSuffixes(int node);
 	int PrimaryExpression();
 	int ArgumentList();
 	int ParenArgumentList();

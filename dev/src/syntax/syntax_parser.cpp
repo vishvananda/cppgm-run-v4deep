@@ -2071,11 +2071,13 @@ int Parser::ParameterDeclaration()
 		throw SyntaxError("expected a parameter declaration");
 	}
 	Add(node, specifiers);
+	SkipAttributes();
 	const int declarator = ParameterLikeDeclarator();
 	if(declarator != kNoSyntaxNode)
 	{
 		Add(node, declarator);
 	}
+	SkipAttributes();
 	// The pack marker written after the type but before the name, as in
 	// `Args... args`, has no declarator to sit in.
 	if(At(posttoken::OP_DOTS))
@@ -2293,7 +2295,7 @@ int Parser::TypeSpecifierSeq()
 			any = true;
 			continue;
 		}
-		if(kind == kIdentifierToken)
+		if(kind == kIdentifierToken || kind == posttoken::OP_COLON2)
 		{
 			const size_t start = Position();
 			bool seen = false;
