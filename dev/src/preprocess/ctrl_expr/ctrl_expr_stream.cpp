@@ -10,9 +10,8 @@ namespace preprocess
 using posttoken::EFundamentalType;
 using posttoken::ETokenType;
 
-void CtrlExprSink::EmitInvalid(const std::string& source)
+void CtrlExprSink::EmitInvalid(const std::string&)
 {
-	(void)source;
 	// The line is `error` whatever the rest of it parses as, so the invalid
 	// token is not recorded: nothing can make it an operand.
 	rejected_ = true;
@@ -46,10 +45,9 @@ void CtrlExprSink::EmitIdentifier(const std::string& source)
 	tokens_.push_back(token);
 }
 
-void CtrlExprSink::EmitLiteral(const std::string& source, EFundamentalType type,
+void CtrlExprSink::EmitLiteral(const std::string&, EFundamentalType type,
                                const std::string& bytes)
 {
-	(void)source;
 	if (!posttoken::FundamentalTypeIsIntegral(type))
 	{
 		// A floating-literal, `void` or `nullptr_t` is not an
@@ -87,55 +85,35 @@ void CtrlExprSink::EmitLiteral(const std::string& source, EFundamentalType type,
 	tokens_.push_back(token);
 }
 
-void CtrlExprSink::EmitLiteralArray(const std::string& source, std::size_t count,
-                                    EFundamentalType type, const std::string& bytes)
+void CtrlExprSink::EmitLiteralArray(const std::string&, std::size_t,
+                                    EFundamentalType, const std::string&)
 {
-	(void)source;
-	(void)count;
-	(void)type;
-	(void)bytes;
 	// An array of anything is explicitly not an integral type.
 	rejected_ = true;
 }
 
-void CtrlExprSink::EmitUserDefinedCharacter(const std::string& source, const std::string& suffix,
-                                            EFundamentalType type, const std::string& bytes)
+void CtrlExprSink::EmitUserDefinedCharacter(const std::string&, const std::string&,
+                                            EFundamentalType, const std::string&)
 {
-	(void)source;
-	(void)suffix;
-	(void)type;
-	(void)bytes;
-	rejected_ = true;
-}
-
-void CtrlExprSink::EmitUserDefinedStringArray(const std::string& source, const std::string& suffix,
-                                              std::size_t count, EFundamentalType type,
-                                              const std::string& bytes)
-{
-	(void)source;
-	(void)suffix;
-	(void)count;
-	(void)type;
-	(void)bytes;
-	rejected_ = true;
-}
-
-void CtrlExprSink::EmitUserDefinedInteger(const std::string& source, const std::string& suffix,
-                                          const std::string& prefix)
-{
-	(void)source;
-	(void)suffix;
-	(void)prefix;
 	// An `integral-literal` is not user defined.
 	rejected_ = true;
 }
 
-void CtrlExprSink::EmitUserDefinedFloating(const std::string& source, const std::string& suffix,
-                                           const std::string& prefix)
+void CtrlExprSink::EmitUserDefinedStringArray(const std::string&, const std::string&,
+                                              std::size_t, EFundamentalType, const std::string&)
 {
-	(void)source;
-	(void)suffix;
-	(void)prefix;
+	rejected_ = true;
+}
+
+void CtrlExprSink::EmitUserDefinedInteger(const std::string&, const std::string&,
+                                          const std::string&)
+{
+	rejected_ = true;
+}
+
+void CtrlExprSink::EmitUserDefinedFloating(const std::string&, const std::string&,
+                                           const std::string&)
+{
 	rejected_ = true;
 }
 
