@@ -193,6 +193,19 @@ void MacroExpander::Run(Frame& frame, std::vector<PPToken>& output)
 
 		if (stack.empty())
 		{
+			// The sequence has reached a quiescent point: the stack is empty,
+			// no invocation is open and no argument prescan is running, so no
+			// token that can name a paint node is reachable again.  Waiting for
+			// the end of the sequence instead would hold every node a long
+			// expansion chain made - a chain of length n makes n of them per
+			// invocation - for as long as the sequence runs, and a translation
+			// unit is usually one such sequence.
+			if (frame.feed != nullptr && frames_.size() == 1)
+			{
+				frame.arguments.clear();
+				frame.collecting_head = PPToken();
+				paint_.Clear();
+			}
 			if (!Pull(frame))
 				break;
 			continue;
@@ -404,7 +417,7 @@ void MacroExpander::CompleteInvocation(Frame& frame)
 }
 
 const std::vector<PPToken>& MacroExpander::PaintedArgument(
-	Frame& frame, std::uint32_t index, bool raw, const PPMacroPaint& argument_paint)
+	Frame& frame, std::uint32_t index, bool raw, PPMacroPaint argument_paint)
 {
 	Argument& argument = frame.arguments[index];
 	if (raw)
@@ -439,7 +452,7 @@ const std::vector<PPToken>& MacroExpander::PaintedArgument(
 		argument.expanded_painted = argument.expanded;
 		for (std::size_t at = 0; at < argument.expanded_painted.size(); ++at)
 		{
-			argument.expanded_painted[at].paint = PPMacroPaintUnion(
+			argument.expanded_painted[at].paint = paint_.Union(
 				argument.expanded_painted[at].paint, argument_paint);
 			argument.expanded_painted[at].substituted = true;
 		}
@@ -463,10 +476,10 @@ void MacroExpander::Substitute(Frame& frame, const PPMacro& macro, const PPToken
 	// parameter value is the one place the chain does not survive: a token that
 	// came from a substitution carries its own names and the macro it is being
 	// substituted into, but not the names the head had accumulated.
-	const PPMacroPaint self_paint = PPMacroPaintAdd(
-		head.substituted ? PPMacroPaint() : head.paint, macro.id);
-	const PPMacroPaint argument_paint = PPMacroPaintAdd(
-		head.substituted ? head.paint : PPMacroPaint(), macro.id);
+	const PPMacroPaint self_paint = paint_.Add(
+		head.substituted ? nullptr : head.paint, macro.id);
+	const PPMacroPaint argument_paint = paint_.Add(
+		head.substituted ? head.paint : nullptr, macro.id);
 	const std::uint32_t variadic_index = static_cast<std::uint32_t>(macro.parameters.size());
 
 	// The parts in the order the definition wrote them, with every parameter
@@ -626,7 +639,7 @@ void MacroExpander::Substitute(Frame& frame, const PPMacro& macro, const PPToken
 					throw PreprocessError("invalid token paste");
 				// A pasted token is the value of the invocation, so it is a
 				// substituted token like any other.
-				pasted[0].paint = PPMacroPaintUnion(left.paint, right.paint);
+				pasted[0].paint = paint_.Union(left.paint, right.paint);
 				pasted[0].substituted = true;
 				pasted[0].file = head.file;
 				pasted[0].line = head.line;

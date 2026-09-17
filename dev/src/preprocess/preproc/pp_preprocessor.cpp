@@ -219,7 +219,7 @@ Preprocessor::Preprocessor(IPPTextSink& sink, const std::string& build_date,
                            const std::string& build_time)
 	: sink_(sink)
 	, pragma_step_(0)
-	, expander_(macros_, *this)
+	, expander_(macros_, *this, paint_)
 	, null_stream_(&null_buffer_)
 	, ctrl_sink_(null_stream_)
 	, ctrl_post_(ctrl_sink_)
@@ -231,6 +231,7 @@ Preprocessor::Preprocessor(IPPTextSink& sink, const std::string& build_date,
 void Preprocessor::ProcessPrimarySource(const std::string& path)
 {
 	macros_.Clear();
+	paint_.Clear();
 	pragma_once_.clear();
 	counter_ = 0;
 	stack_.clear();
@@ -422,6 +423,10 @@ void Preprocessor::DispatchDirective()
 	state.line_start = true;
 	HandleDirective(state.directive, 0);
 	state.directive.clear();
+	// Nothing a directive painted outlives it: the tokens that named the nodes
+	// were consumed inside the handler, and no directive stores paint in the
+	// macro table.
+	paint_.Clear();
 }
 
 bool Preprocessor::NextTextToken(PPToken& token)
@@ -446,11 +451,17 @@ void Preprocessor::PushTextToken(PPToken token)
 
 void Preprocessor::EndTextSequence()
 {
-	if (!text_active_)
-		return;
-	text_active_ = false;
-	expander_.FinishTextSequence();
-	text_.clear();
+	if (text_active_)
+	{
+		text_active_ = false;
+		expander_.FinishTextSequence();
+		text_.clear();
+	}
+	// Every node the sequence made is unreachable once it has drained: its
+	// tokens went to the sink, the macro table or a local, and none of those
+	// keeps a paint.  Releasing here rather than at the end of the translation
+	// unit is what keeps a long expansion chain's nodes from accumulating.
+	paint_.Clear();
 }
 
 std::size_t Preprocessor::HandleDirective(const std::vector<PPToken>& tokens, std::size_t hash)

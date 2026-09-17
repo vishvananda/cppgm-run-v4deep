@@ -5,47 +5,45 @@ namespace cppgm
 namespace preprocess
 {
 
-PPMacroPaint PPMacroPaintAdd(const PPMacroPaint& paint, std::uint32_t id)
+PPMacroPaint PPPaintArena::Add(PPMacroPaint paint, std::uint32_t id)
 {
-	if (paint.get() != nullptr && id >= paint->low && id <= paint->high)
+	if (paint != nullptr && id >= paint->low && id <= paint->high)
 	{
-		for (const PPMacroPaintNode* node = paint.get(); node != nullptr;
-		     node = node->parent.get())
+		for (const PPMacroPaintNode* node = paint; node != nullptr; node = node->parent)
 		{
 			if (node->id == id)
 				return paint;
 		}
 	}
 
-	std::shared_ptr<PPMacroPaintNode> grown(new PPMacroPaintNode);
-	grown->parent = paint;
-	grown->id = id;
-	grown->size = (paint ? paint->size : 0) + 1;
-	grown->low = paint ? (id < paint->low ? id : paint->low) : id;
-	grown->high = paint ? (id > paint->high ? id : paint->high) : id;
-	return grown;
+	PPMacroPaintNode grown;
+	grown.parent = paint;
+	grown.id = id;
+	grown.size = (paint != nullptr ? paint->size : 0) + 1;
+	grown.low = paint != nullptr ? (id < paint->low ? id : paint->low) : id;
+	grown.high = paint != nullptr ? (id > paint->high ? id : paint->high) : id;
+	nodes_.push_back(grown);
+	return &nodes_.back();
 }
 
-PPMacroPaint PPMacroPaintUnion(const PPMacroPaint& left, const PPMacroPaint& right)
+PPMacroPaint PPPaintArena::Union(PPMacroPaint left, PPMacroPaint right)
 {
-	if (!left)
+	if (left == nullptr)
 		return right;
-	if (!right)
+	if (right == nullptr)
 		return left;
 	if (left->size > right->size)
-		return PPMacroPaintUnion(right, left);
+		return Union(right, left);
 
 	// `left` is the shorter list.  Every name it carries is already in `right`
 	// in the common case - an argument substituted into its own invocation
 	// carries that invocation's paint - so the usual cost is one walk per name
 	// and no allocation at all.
 	PPMacroPaint result = right;
-	for (const PPMacroPaintNode* node = left.get(); node != nullptr;
-	     node = node->parent.get())
+	for (const PPMacroPaintNode* node = left; node != nullptr; node = node->parent)
 	{
 		bool found = false;
-		for (const PPMacroPaintNode* other = result.get(); other != nullptr;
-		     other = other->parent.get())
+		for (const PPMacroPaintNode* other = result; other != nullptr; other = other->parent)
 		{
 			if (other->id == node->id)
 			{
@@ -54,7 +52,7 @@ PPMacroPaint PPMacroPaintUnion(const PPMacroPaint& left, const PPMacroPaint& rig
 			}
 		}
 		if (!found)
-			result = PPMacroPaintAdd(result, node->id);
+			result = Add(result, node->id);
 	}
 	return result;
 }

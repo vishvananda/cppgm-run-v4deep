@@ -19,7 +19,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -48,8 +48,8 @@ enum EPPTokenKind : std::uint8_t
 };
 
 // One macro name a token may no longer expand, and the names behind it.  The
-// list is shared and never mutated, so `Add` is one allocation and a token
-// that was never painted carries a null pointer.
+// list is shared and never mutated, so a token that was never painted carries a
+// null pointer and painting a replacement costs one small node.
 //
 // `low` and `high` are the extremes of the names in the whole tail.  A name
 // outside them cannot be in the list at all, which answers the common case - a
@@ -57,29 +57,72 @@ enum EPPTokenKind : std::uint8_t
 // range - without walking it.
 struct PPMacroPaintNode
 {
-	std::shared_ptr<const PPMacroPaintNode> parent;
+	const PPMacroPaintNode* parent;
 	std::uint32_t id;
 	std::uint32_t size;
 	std::uint32_t low;
 	std::uint32_t high;
 };
 
-typedef std::shared_ptr<const PPMacroPaintNode> PPMacroPaint;
+// A node is owned by the translation unit's arena, not by the token that names
+// it.  The list is immutable and shared, so no node ever has one owner, and
+// every token that can name one is finished with by the time the arena is
+// released - a shared ownership count would be paid on the hot path for a
+// lifetime that is already known.
+typedef const PPMacroPaintNode* PPMacroPaint;
+
+// The paint nodes of one translation unit, released in bulk.
+//
+// A node is read through exactly two kinds of token: one on a live rescan
+// stack, and one in the argument list of the invocation currently being
+// substituted - those are the only places a paint is handed back to `Add`,
+// `Union` or `PPTokenIsPainted`.  A node is therefore dead as soon as no such
+// token names it, and `Clear` is called at those points and at no others.
+// Nothing else may call it: a token kept in an ordinary local beyond its
+// construct still holds a pointer, and although nothing dereferences it again,
+// the release point is defined by what is read and not by what is destroyed.
+class PPPaintArena
+{
+public:
+	// The paint a token carries once the macro `id` is being expanded.  Adding
+	// a name the token already carries returns the same list.
+	PPMacroPaint Add(PPMacroPaint paint, std::uint32_t id);
+
+	// The union of two paints, used when a substituted argument joins the paint
+	// of the invocation it is substituted into.  The shorter list is the one
+	// walked, so the wide paint of a long expansion chain is not the one
+	// scanned.
+	PPMacroPaint Union(PPMacroPaint left, PPMacroPaint right);
+
+	// Releases every node at once.  Cheap when nothing has been painted since
+	// the last call, which is the common case: a token sequence reaches the
+	// quiescent point far more often than it invokes a macro.
+	void Clear()
+	{
+		if (!nodes_.empty())
+			nodes_.clear();
+	}
+
+private:
+	// A deque: nodes are handed out by address and the arena grows while
+	// earlier ones are still in use, so an existing node must not move.
+	std::deque<PPMacroPaintNode> nodes_;
+};
 
 struct PPToken
 {
 	std::string spelling;
-	PPMacroPaint paint;
-	std::uint32_t file;
-	std::uint32_t line;
-	EPPTokenKind kind;
+	PPMacroPaint paint = nullptr;
+	std::uint32_t file = 0;
+	std::uint32_t line = 0;
+	EPPTokenKind kind = kPPIdentifier;
 	// True when the token is the value of a macro parameter: it was substituted
 	// for a parameter reference, or pasted from tokens that were.  `macros.md`
 	// says the nestedness relationship does not survive parameter substitution,
 	// and this is the bit that says so: a substituted token that becomes an
 	// invocation head starts a fresh nesting chain for its own replacement while
 	// its own paint still bars the names it already carries.
-	bool substituted;
+	bool substituted = false;
 };
 
 // True when `token` may no longer expand the macro whose identity is `id`.
@@ -87,25 +130,16 @@ struct PPToken
 // usually the one most recently added, so the walk is short.
 inline bool PPTokenIsPainted(const PPToken& token, std::uint32_t id)
 {
-	const PPMacroPaintNode* node = token.paint.get();
+	const PPMacroPaintNode* node = token.paint;
 	if (node == nullptr || id < node->low || id > node->high)
 		return false;
-	for (; node != nullptr; node = node->parent.get())
+	for (; node != nullptr; node = node->parent)
 	{
 		if (node->id == id)
 			return true;
 	}
 	return false;
 }
-
-// The paint a token carries once the macro `id` is being expanded.  Adding a
-// name the token already carries returns the same list.
-PPMacroPaint PPMacroPaintAdd(const PPMacroPaint& paint, std::uint32_t id);
-
-// The union of two paints, used when a substituted argument joins the paint of
-// the invocation it is substituted into.  The shorter list is the one walked,
-// so the wide paint of a long expansion chain is not the one scanned.
-PPMacroPaint PPMacroPaintUnion(const PPMacroPaint& left, const PPMacroPaint& right);
 
 // Where a text-sequence's finalized tokens go.  The expander reports each
 // token as soon as nothing in the sequence can change it, so a translation

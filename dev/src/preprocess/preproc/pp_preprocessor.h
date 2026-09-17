@@ -159,6 +159,7 @@ private:
 	// after `_Pragma`, 2 after `(`, 3 after its string-literal.
 	std::size_t pragma_step_;
 	MacroTable macros_;
+	PPPaintArena paint_;
 	MacroExpander expander_;
 
 	// `#if` reads the evaluator's value, not its text view, so the view is

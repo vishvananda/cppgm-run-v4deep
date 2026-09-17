@@ -1,6 +1,6 @@
 // Macro replacement: the rescan of 16.3 with the course's nesting rule.
 //
-// The input is a text-sequence's tokens in a stack whose front is the next token
+// The input is a text-sequence's tokens in a stack whose back is the next token
 // to examine, exactly the structure `macros.md`'s design note suggests: an
 // invocation's tokens are popped and its replacement pushed, so the tokens that
 // follow the invocation in the source are examined again after it - which is
@@ -66,9 +66,10 @@ public:
 class MacroExpander
 {
 public:
-	MacroExpander(MacroTable& macros, IMacroBuiltins& builtins)
+	MacroExpander(MacroTable& macros, IMacroBuiltins& builtins, PPPaintArena& paint)
 		: macros_(macros)
 		, builtins_(builtins)
+		, paint_(paint)
 	{}
 
 	// Macro-replaces `input` and appends the result to `output`.  The whole
@@ -155,7 +156,7 @@ private:
 	// argument as written, which is what a stringized parameter and a `##`
 	// operand need; `argument_paint` is the paint a substituted value joins.
 	const std::vector<PPToken>& PaintedArgument(Frame& frame, std::uint32_t index,
-	                                            bool raw, const PPMacroPaint& argument_paint);
+	                                            bool raw, PPMacroPaint argument_paint);
 
 	// True when the token spells a function-like macro, which is the only kind
 	// of name whose invocation needs the `(` that follows it.
@@ -163,6 +164,10 @@ private:
 
 	MacroTable& macros_;
 	IMacroBuiltins& builtins_;
+	// The translation unit's paint nodes.  The extenders hand one out and never
+	// free it; the arena is released whole when the unit's last token has been
+	// consumed.
+	PPPaintArena& paint_;
 	// The block a streamed text sequence is expanded into before it is handed
 	// over.  Keeping the capacity across sequences keeps the expansion free of
 	// per-token allocation.
