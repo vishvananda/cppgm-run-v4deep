@@ -766,7 +766,6 @@ void Preprocessor::EmitPragmaToken(const PPToken& token)
 		{
 			throw PreprocessError("malformed _Pragma operator");
 		}
-		pragma_.clear();
 		ExecutePragma(text);
 		pragma_step_ = 3;
 		return;

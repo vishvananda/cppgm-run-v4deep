@@ -119,8 +119,8 @@ private:
 	void ApplyPragmaOnce();
 
 	IPPTextSink& sink_;
-	// The `_Pragma` operator being collected: `_Pragma` `(` string-literal `)`.
-	std::vector<PPToken> pragma_;
+	// How far into a `_Pragma` operator the stream has got: 0 outside one, 1
+	// after `_Pragma`, 2 after `(`, 3 after its string-literal.
 	std::size_t pragma_step_;
 	MacroTable macros_;
 	MacroExpander expander_;
