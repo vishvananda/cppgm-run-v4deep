@@ -110,6 +110,12 @@ paired difference median +0.0019 s, MAD 0.0009 s, range [-0.0030..+0.0066].
 The latency effect is 371x the noise floor.  Every observation is kept in
 `/tmp/pa6_types_benchmark/types_benchmark.tsv`.
 
+The run repeated on the final binary reproduced it: 0.406 s [0.400..0.417]
+against the reference's 0.738 s, paired median -0.3300 s, 5 of 5 blocks
+negative, MAD 0.0038 s.  That run's A/A arm was disturbed - MAD 0.0072 s
+against the 0.0009 s above - so its effect is 46x its own noise floor rather
+than 371x; the quoted run is the quieter one and both are recorded.
+
 The first measurement of this stage was the opposite: 12.760 s against the
 reference's 0.730 s, a 17x regression, at a peak RSS of 37.1 MB.  The cause was
 a quadratic walk, not the semantic work: the analyzer iterated a node's
@@ -148,8 +154,10 @@ added, so there is no compiler-work budget to justify and none is claimed.
   reference in exit status and dump.
 - `student.tests/types_sweep.pl` - 760 generated crossings of the declaration
   shapes this stage owns agree with the reference in exit status and dump.
-  Before the fix it found five differences: the four readings now recorded in
-  the ledger and the class-call scope below.
+  Its first run found five differences: the four readings recorded below and
+  the class-call scope.  Two further forms - `1 ? 2 : 3` as a bound and
+  `sizeof(x)` of an object - came from probing the reference directly and were
+  then added to the sweep.
 
 ## Handoff ledger
 
