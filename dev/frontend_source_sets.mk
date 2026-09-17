@@ -8,7 +8,7 @@ FRONTEND_TEST_RUNNER_SOURCE_ID := support/testing/test_runner
 
 FRONTEND_OBJ_BASENAMES_abimangle :=
 FRONTEND_OBJ_BASENAMES_pptoken := preprocess/tokens/pp_source_translation preprocess/tokens/pp_tokenizer
-FRONTEND_OBJ_BASENAMES_posttoken :=
+FRONTEND_OBJ_BASENAMES_posttoken := posttoken/fundamental_type posttoken/simple_token posttoken/pa2_decode posttoken/post_literal posttoken/pp_number posttoken/post_token_stream preprocess/tokens/pp_source_translation preprocess/tokens/pp_tokenizer
 FRONTEND_OBJ_BASENAMES_ppexpr :=
 FRONTEND_OBJ_BASENAMES_preproc :=
 FRONTEND_OBJ_BASENAMES_cppgm++ :=
