@@ -179,7 +179,8 @@ schedule. Two things came out of it.
 
 The first is cost. A nested expression needs four parser frames per level
 instead of twelve; on the same 10.7 MB corpus the stage went from 0.6815 s to
-0.6268 s (medians of 20 timed runs each; the A/A noise floor is 0.0023 s).
+0.6268 s (medians of 20 timed runs each, against that run's 0.0023 s A/A noise
+floor).
 
 The second is correctness. Recursive descent grows the C stack with nesting, and
 nothing bounded it, so the usable depth was a property of `ulimit -s` and the
@@ -281,16 +282,21 @@ controlling expressions (operator precedence chains, mixed signedness, `defined`
 conditionals, every character-literal prefix, and a few lines the course
 definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
 
+Readings below are from the final revision (the commit that wrote this record);
+an earlier run of the same protocol on the same corpus, before the last
+comment-only commits, read 0.6268 s / 19.6 MB against 0.9891 s / 18.5 MB with a
+0.0023 s noise floor, i.e. the same result.
+
 | arm | latency (median [min..max]) | peak RSS (median [min..max]) |
 | --- | --- | --- |
-| `mine` | 0.6268 s [0.6233..0.6360] | 19.6 MB [19.5..19.6] |
-| `ref`  | 0.9891 s [0.9840..1.0161] | 18.5 MB [18.4..18.6] |
+| `mine` | 0.6275 s [0.6248..0.6450] | 19.6 MB [19.5..19.6] |
+| `ref`  | 0.9887 s [0.9862..1.0602] | 18.5 MB [18.4..18.6] |
 
-- Paired per-block difference (mine - ref): -0.3620 s [-0.3655..-0.3597],
+- Paired per-block difference (mine - ref): -0.3614 s [-0.3647..-0.3425],
   **5 of 5 blocks negative**.
-- A/A noise calibration: paired difference -0.0005 s [-0.0364..+0.0025], median
-  absolute difference 0.0023 s, worst excursion 0.0364 s, and 0 of 5 A/A blocks
-  reached the measured A/B effect. The A/B difference is about 10 times the
+- A/A noise calibration: paired difference +0.0029 s [-0.0042..+0.0208], median
+  absolute difference 0.0042 s, worst excursion 0.0208 s, and 0 of 5 A/A blocks
+  reached the measured A/B effect. The A/B difference is about 17 times the
   worst excursion the reference produced against itself.
 - Marginal cost of this stage: the same corpus, read by the three tools in one
   interleaved loop (medians of 7; `dev/ppexpr` 0.62 s / 19.59 MB, the reference
@@ -303,8 +309,10 @@ definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
   bounds the stage's added work from above rather than isolating it.
 - The F3 collapse is the one change made *for* performance, and it is on this
   table: the same corpus and schedule read 0.6815 s before it and 0.6268 s
-  after, against a 0.0023 s noise floor. Nothing else here depends on added
-  compiler work, so there is no other profitability budget to justify.
+  after, against the 0.0023 s noise floor that run measured; the final
+  revision's re-reading of 0.6275 s against a 0.0042 s floor is the same
+  result. Nothing else here depends on added compiler work, so there is no
+  other profitability budget to justify.
 - Peak RSS: the stage reads 1.2 MB / +6% over the reference on this corpus, and
   the delta grows with the source - 1 208 KB / 2 056 KB / 4 056 KB on
   10 669 643 / 21 339 286 / 42 678 572 bytes of input, i.e. O(n) with a slope of
@@ -330,11 +338,11 @@ definition rejects). `student.tests/ppexpr_benchmark.pl 40000 5`.
   compiles with `clang++ -std=gnu++11 -Wall -O3`, which is the other toolchain
   the repository's targets use and the one that has to accept the overflow
   builtins.
-- `student.tests/ppexpr_differential.pl 1500 SEED` for seeds 1-18 - no
-  divergence in stdout or exit status. Its curated list pins the reducers for
-  F1, F2 and the nesting bound, so the classes the fixtures do not reach are
-  reproducible from the committed harness rather than only from this audit's
-  scratch corpora.
+- `student.tests/ppexpr_differential.pl 1500 SEED` for seeds 1-18, on the final
+  revision - 27 000 inputs, no divergence in stdout or exit status. Its curated
+  list pins the reducers for F1, F2 and the nesting bound, so the classes the
+  fixtures do not reach are reproducible from the committed harness rather than
+  only from this audit's scratch corpora.
 - `student.tests/ppexpr_sweep.pl` - 190 694 systematic candidates: every binary
   operator spelling (punctuator and alternative) crossed with 40 operands and
   four parenthesisation shapes, every unary spelling crossed with the same
