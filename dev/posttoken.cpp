@@ -8,9 +8,9 @@
 // `dev/src/posttoken`) performs phase 7's tokenization.  The input is rejected
 // with EXIT_FAILURE when one of the earlier phases fails, as pptoken does.
 //
-// This file owns only the PA2 text format: the typed token facts travel
-// through `IPostTokenSink`, so no later phase has to produce or parse this
-// text.
+// The PA2 text format itself lives in `posttoken/post_token_text.h`, because
+// `preproc` prints its preprocessed tokens in it too; this file only wires the
+// tokenizer to it and to standard output.
 
 #include <cstddef>
 #include <iostream>
@@ -20,191 +20,13 @@
 
 using namespace std;
 
-#include "posttoken/fundamental_type.h"
-#include "posttoken/post_token_sink.h"
 #include "posttoken/post_token_stream.h"
+#include "posttoken/post_token_text.h"
 #include "preprocess/tokens/pp_source_translation.h"
 #include "preprocess/tokens/pp_tokenizer.h"
 
 namespace
 {
-
-using cppgm::posttoken::EFundamentalType;
-using cppgm::posttoken::ETokenType;
-using cppgm::posttoken::FundamentalTypeName;
-using cppgm::posttoken::IPostTokenSink;
-using cppgm::posttoken::SimpleTokenName;
-
-// The output is a pure function of the token facts, and it is the dominant
-// cost of the tool, so lines are composed in one buffer and handed to the
-// stream in blocks.  That trades a virtual call per field for a copy per
-// line, and keeps the stream's own formatting machinery out of the hot path.
-class TextPostTokenSink : public IPostTokenSink
-{
-public:
-	void EmitInvalid(const string& source) override
-	{
-		Write("invalid ");
-		Write(source);
-		EndLine();
-	}
-
-	void EmitSimple(const string& source, ETokenType type) override
-	{
-		Write("simple ");
-		Write(source);
-		Write(" ");
-		Write(SimpleTokenName(type));
-		EndLine();
-	}
-
-	void EmitIdentifier(const string& source) override
-	{
-		Write("identifier ");
-		Write(source);
-		EndLine();
-	}
-
-	void EmitLiteral(const string& source, EFundamentalType type,
-	                 const string& bytes) override
-	{
-		Write("literal ");
-		Write(source);
-		WriteType(type);
-		WriteHexDump(bytes);
-		EndLine();
-	}
-
-	void EmitLiteralArray(const string& source, size_t count, EFundamentalType type,
-	                      const string& bytes) override
-	{
-		Write("literal ");
-		Write(source);
-		WriteArrayType(count, type);
-		WriteHexDump(bytes);
-		EndLine();
-	}
-
-	void EmitUserDefinedCharacter(const string& source, const string& suffix,
-	                              EFundamentalType type, const string& bytes) override
-	{
-		Write("user-defined-literal ");
-		Write(source);
-		Write(" ");
-		Write(suffix);
-		Write(" character ");
-		Write(FundamentalTypeName(type));
-		WriteHexDump(bytes);
-		EndLine();
-	}
-
-	void EmitUserDefinedStringArray(const string& source, const string& suffix, size_t count,
-	                                EFundamentalType type, const string& bytes) override
-	{
-		Write("user-defined-literal ");
-		Write(source);
-		Write(" ");
-		Write(suffix);
-		Write(" string");
-		WriteArrayType(count, type);
-		WriteHexDump(bytes);
-		EndLine();
-	}
-
-	void EmitUserDefinedInteger(const string& source, const string& suffix,
-	                            const string& prefix) override
-	{
-		Write("user-defined-literal ");
-		Write(source);
-		Write(" ");
-		Write(suffix);
-		Write(" integer ");
-		Write(prefix);
-		EndLine();
-	}
-
-	void EmitUserDefinedFloating(const string& source, const string& suffix,
-	                             const string& prefix) override
-	{
-		Write("user-defined-literal ");
-		Write(source);
-		Write(" ");
-		Write(suffix);
-		Write(" floating ");
-		Write(prefix);
-		EndLine();
-	}
-
-	void EmitEof() override
-	{
-		Write("eof");
-		EndLine();
-	}
-
-	void Flush()
-	{
-		if (!buffer_.empty())
-		{
-			cout.write(buffer_.data(), static_cast<streamsize>(buffer_.size()));
-			buffer_.clear();
-		}
-		cout.flush();
-	}
-
-private:
-	static const size_t kFlushThreshold = 1 << 16;
-
-	void Write(const char* text)
-	{
-		buffer_.append(text);
-		if (buffer_.size() >= kFlushThreshold)
-			Flush();
-	}
-
-	void Write(const string& text)
-	{
-		buffer_.append(text);
-		if (buffer_.size() >= kFlushThreshold)
-			Flush();
-	}
-
-	void WriteType(EFundamentalType type)
-	{
-		Write(" ");
-		Write(FundamentalTypeName(type));
-	}
-
-	void WriteArrayType(size_t count, EFundamentalType type)
-	{
-		Write(" array of ");
-		buffer_.append(to_string(count));
-		Write(" ");
-		Write(FundamentalTypeName(type));
-	}
-
-	// The ABI image of the literal's code units, one byte per code unit for
-	// `char` and two hexadecimal digits per byte.
-	void WriteHexDump(const string& bytes)
-	{
-		static const char kDigits[] = "0123456789ABCDEF";
-		buffer_.push_back(' ');
-		for (size_t index = 0; index < bytes.size(); ++index)
-		{
-			unsigned char value = static_cast<unsigned char>(bytes[index]);
-			buffer_.push_back(kDigits[(value >> 4) & 0xF]);
-			buffer_.push_back(kDigits[value & 0xF]);
-		}
-	}
-
-	void EndLine()
-	{
-		buffer_.push_back('\n');
-		if (buffer_.size() >= kFlushThreshold)
-			Flush();
-	}
-
-	string buffer_;
-};
 
 // Reads standard input into one buffer.  The read is chunked so the stream
 // buffer moves whole blocks instead of one code unit per virtual call, and the
@@ -249,7 +71,7 @@ int main(int argc, char** argv)
 
 		string input = ReadStandardInput();
 
-		TextPostTokenSink output;
+		cppgm::posttoken::TextPostTokenSink output(cout);
 		cppgm::preprocess::TranslatedSource source(std::move(input));
 		cppgm::posttoken::PostTokenStream tokens(output);
 		cppgm::preprocess::PPTokenizer tokenizer(source, tokens);

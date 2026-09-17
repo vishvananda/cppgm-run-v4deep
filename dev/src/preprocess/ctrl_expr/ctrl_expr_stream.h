@@ -68,6 +68,13 @@ public:
 	// `error`, which is why the empty buffer and the flag are separate.
 	void EndOfLine();
 
+	// The line's value, without rendering it: `false` is the answer the text
+	// view spells `error`.  PA4's `#if` reads this, because the truth of a
+	// controlling expression is a property of the value and not of its decimal
+	// spelling.  The line is left as it was, so a caller that wants both calls
+	// this before ending the line.
+	bool Result(CtrlExprValue& value);
+
 	// Writes the output block to the stream.
 	void Flush();
 

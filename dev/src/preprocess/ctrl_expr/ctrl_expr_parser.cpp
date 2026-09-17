@@ -83,16 +83,13 @@ const CtrlExpression::BinOpEntry CtrlExpression::kBinaryOps[] =
 
 void CtrlExpression::Evaluate(const CtrlToken* tokens, std::size_t count, std::string& out)
 {
-	tokens_ = tokens;
-	count_ = count;
-
-	if (!Parse())
+	CtrlExprValue value;
+	EvaluateValue(tokens, count, value);
+	if (!value.valid)
 	{
 		out.append("error");
 		return;
 	}
-
-	const Value& value = values_.back();
 	if (value.is_unsigned)
 	{
 		AppendDecimal(out, value.bits);
@@ -102,6 +99,25 @@ void CtrlExpression::Evaluate(const CtrlToken* tokens, std::size_t count, std::s
 	{
 		AppendSigned(out, value.bits);
 	}
+}
+
+void CtrlExpression::EvaluateValue(const CtrlToken* tokens, std::size_t count,
+                                   CtrlExprValue& value)
+{
+	tokens_ = tokens;
+	count_ = count;
+
+	value.valid = false;
+	value.is_unsigned = false;
+	value.bits = 0;
+
+	if (!Parse())
+		return;
+
+	const Value& result = values_.back();
+	value.valid = true;
+	value.is_unsigned = result.is_unsigned;
+	value.bits = result.bits;
 }
 
 bool CtrlExpression::Parse()

@@ -40,6 +40,21 @@ namespace cppgm
 namespace preprocess
 {
 
+// One controlling expression's value, for a consumer that needs the number
+// rather than PA3's text view of it.  `#if` is that consumer: the truth of the
+// controlling expression is a property of the value, and reading it back out of
+// the rendered decimal would be a text roundtrip between two phases of one
+// translation.
+struct CtrlExprValue
+{
+	// The token sequence was a valid controlling expression: the grammar
+	// matched, every token was consumed, and no course-defined value error was
+	// reached during evaluation.
+	bool valid;
+	bool is_unsigned;
+	unsigned long long bits;
+};
+
 // One controlling expression, parsed and evaluated into its output line.  The
 // sink keeps one of these for the whole run, so the two stacks keep their
 // capacity across lines.
@@ -59,6 +74,10 @@ public:
 	// mismatch, an unconsumed token, or one of the handout's course-defined
 	// value errors reached during evaluation.
 	void Evaluate(const CtrlToken* tokens, std::size_t count, std::string& out);
+
+	// The same evaluation, reported as the value itself.  `value.valid` is the
+	// answer `Evaluate` spells `error`.
+	void EvaluateValue(const CtrlToken* tokens, std::size_t count, CtrlExprValue& value);
 
 private:
 	// A sub-expression's value: always one of the two promoted types the

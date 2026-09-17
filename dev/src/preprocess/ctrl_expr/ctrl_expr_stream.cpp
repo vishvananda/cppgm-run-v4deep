@@ -124,6 +124,21 @@ void CtrlExprSink::EmitEof()
 	EndLine();
 }
 
+bool CtrlExprSink::Result(CtrlExprValue& value)
+{
+	// The line-level rejection rules already failed, and an empty line is not
+	// an expression at all; both are the `error` the text view reports.
+	if (rejected_ || tokens_.empty())
+	{
+		value.valid = false;
+		value.is_unsigned = false;
+		value.bits = 0;
+		return false;
+	}
+	expression_.EvaluateValue(tokens_.data(), tokens_.size(), value);
+	return value.valid;
+}
+
 void CtrlExprSink::EndOfLine()
 {
 	// A logical line that carried nothing at all - whitespace or a comment -
