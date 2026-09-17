@@ -315,7 +315,7 @@ void PPTokenizer::Tokenize()
 			ScanWhitespaceSequence();
 			continue;
 		}
-		if (after_include_ && (code_point == '<' || code_point == '"'))
+		if (after_include_ && StartsHeaderName())
 		{
 			ScanHeaderName();
 			continue;
@@ -416,6 +416,19 @@ void PPTokenizer::ScanWhitespaceSequence()
 	ReportLocation(start);
 	NoteEmitted(role_whitespace);
 	output_.emit_whitespace_sequence();
+}
+
+// A header-name needs at least one h-char or q-char.  `#include <>` and
+// `#include ""` therefore fall back to ordinary tokenization: the delimiters
+// are an operator or a string literal rather than a header-name.
+bool PPTokenizer::StartsHeaderName() const
+{
+	int opening = Current();
+	if (opening != '<' && opening != '"')
+		return false;
+	int closing = opening == '<' ? '>' : '"';
+	int following = CodeAt(position_ + 1);
+	return following != kEndOfFile && following != kLineFeed && following != closing;
 }
 
 void PPTokenizer::ScanHeaderName()
@@ -673,15 +686,17 @@ bool PPTokenizer::RawStringTerminatesAt(const std::vector<int>& physical, std::s
 	return physical[at + delimiter_length + 1] == '"';
 }
 
-// Raw string literals are read from the untranslated code points: 2.2/1.3
-// reverts the phase 1 and 2 rewrites between the opening and closing quotes,
-// so trigraphs, universal-character-names and line splices inside them stand.
+// Raw string literals read the untranslated code points between their opening
+// and closing quotes: 2.2/1.3 reverts the phase 1 and 2 rewrites there, so
+// trigraphs, universal-character-names and line splices inside a raw string
+// stand as written.  The spelling before the opening quote, including the
+// prefix and the quote itself, still comes from the translated stream.
 void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 {
 	std::size_t start = position_;
 	std::size_t quote_index = start + quote_offset;
-	std::size_t physical_begin = source_.translated[start].physical;
-	std::size_t delimiter_begin = source_.translated[quote_index].physical + 1;
+	std::size_t quote_physical = source_.translated[quote_index].physical;
+	std::size_t delimiter_begin = quote_physical + 1;
 	const std::vector<int>& physical = source_.physical;
 
 	std::size_t cursor = delimiter_begin;
@@ -717,7 +732,8 @@ void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 	std::size_t suffix_begin = position_;
 	bool user_defined = ScanUdSuffix();
 	ReportLocation(start);
-	std::string spelling = PhysicalSpelling(physical_begin, physical_end);
+	std::string spelling = TranslatedSpelling(start, quote_index + 1);
+	spelling += PhysicalSpelling(quote_physical + 1, physical_end);
 	if (user_defined)
 	{
 		spelling += TranslatedSpelling(suffix_begin, position_);

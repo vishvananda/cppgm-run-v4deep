@@ -54,6 +54,7 @@ private:
 	void EmitOperator(std::size_t begin, std::size_t length);
 	void EmitNonWhitespaceCharacter(std::size_t begin);
 	void ScanWhitespaceSequence();
+	bool StartsHeaderName() const;
 	void ScanHeaderName();
 	void ScanPPNumber();
 	void ScanIdentifierLike();
