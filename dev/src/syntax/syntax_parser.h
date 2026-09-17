@@ -60,10 +60,7 @@ private:
 	void Advance();
 	bool Accept(int kind);
 	void Expect(int kind, const char* what);
-	std::size_t Position() const
-	{
-		return pos_;
-	}
+	std::size_t Position() const;
 	std::size_t EndPosition() const;
 
 	std::string JoinedText(std::size_t first, std::size_t last) const;
@@ -83,23 +80,11 @@ private:
 	void Rollback(const Mark& mark);
 
 	// --- nodes ----------------------------------------------------------
-	int Tag(const char* name)
-	{
-		return arena_.Make(name);
-	}
-	int Named(const char* name, const std::string& label)
-	{
-		return arena_.Make(name, label);
-	}
-	int Terminal(const char* name, const SyntaxToken& token)
-	{
-		return arena_.Make(name, TokenLabel(token));
-	}
+	int Tag(const char* name);
+	int Named(const char* name, const std::string& label);
+	int Terminal(const char* name, const SyntaxToken& token);
 	static std::string TokenLabel(const SyntaxToken& token);
-	void Add(int parent, int child)
-	{
-		arena_.AddChild(parent, child);
-	}
+	void Add(int parent, int child);
 
 	// --- name categories ------------------------------------------------
 	void PushScope();
@@ -190,21 +175,8 @@ private:
 	std::string NestedNameSpecifier(bool& present);
 	int DecltypeSpecifier();
 	bool AtTypeSpecifierStart(std::size_t offset = 0) const;
-	// True when the innermost angle list was opened by a speculative
-	// template-id that has already consumed a logical operator: a `>` there is
-	// then an operator, not the list's closer.
-	bool AngleGuardSuspended() const
-	{
-		return !angle_speculative_.empty() && angle_speculative_.back() != 0 &&
-		       angle_logical_.back() != 0;
-	}
-	void NoteLogicalInAngle()
-	{
-		if(angle_depth_ > 0 && !angle_logical_.empty())
-		{
-			angle_logical_.back() = 1;
-		}
-	}
+	bool AngleGuardSuspended() const;
+	void NoteLogicalInAngle();
 
 	// --- names ----------------------------------------------------------
 	int IdExpression(const char* tag);

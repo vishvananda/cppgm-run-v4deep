@@ -367,9 +367,34 @@ void Parser::Expect(int kind, const char* what)
 	}
 }
 
+size_t Parser::Position() const
+{
+	return pos_;
+}
+
 size_t Parser::EndPosition() const
 {
 	return rshift_split_ ? pos_ + 1 : pos_;
+}
+
+int Parser::Tag(const char* name)
+{
+	return arena_.Make(name);
+}
+
+int Parser::Named(const char* name, const string& label)
+{
+	return arena_.Make(name, label);
+}
+
+int Parser::Terminal(const char* name, const SyntaxToken& token)
+{
+	return arena_.Make(name, TokenLabel(token));
+}
+
+void Parser::Add(int parent, int child)
+{
+	arena_.AddChild(parent, child);
 }
 
 string Parser::JoinedText(size_t first, size_t last) const
@@ -2508,6 +2533,23 @@ int Parser::DecltypeSpecifier()
 	Expect(posttoken::OP_RPAREN, "`)`");
 	arena_.SetLabel(node, JoinedText(start, EndPosition()));
 	return node;
+}
+
+// True when the innermost angle list was opened by a speculative template-id
+// that has already consumed a logical operator: a `>` there is then an
+// operator, not the list's closer.
+bool Parser::AngleGuardSuspended() const
+{
+	return !angle_speculative_.empty() && angle_speculative_.back() != 0 &&
+	       angle_logical_.back() != 0;
+}
+
+void Parser::NoteLogicalInAngle()
+{
+	if(angle_depth_ > 0 && !angle_logical_.empty())
+	{
+		angle_logical_.back() = 1;
+	}
 }
 
 void Parser::EnterAngle()
