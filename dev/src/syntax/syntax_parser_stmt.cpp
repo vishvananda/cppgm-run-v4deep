@@ -455,6 +455,7 @@ int Parser::ConditionalExpression()
 	const int left = BinaryExpression(1);
 	if(Accept(posttoken::OP_QMARK))
 	{
+		NoteLogicalInAngle();
 		const int node = Tag("conditional-expression");
 		Add(node, left);
 		Add(node, Expression());
@@ -480,11 +481,17 @@ int Parser::BinaryExpression(int level)
 			break;
 		}
 		// Inside a template argument list a `>` or `>>` at the outermost
-		// delimiter level closes the list rather than comparing or shifting.
-		if(angle_depth_ > 0 && nested_delim_ == 0 &&
+		// delimiter level closes the list rather than comparing or shifting,
+		// unless a logical operator has already been read in a speculative
+		// template-id: `x < y || z > w` is then a comparison, not a template-id.
+		if(angle_depth_ > 0 && nested_delim_ == 0 && !AngleGuardSuspended() &&
 		   (kind == posttoken::OP_GT || kind == posttoken::OP_RSHIFT))
 		{
 			break;
+		}
+		if(level <= 2)
+		{
+			NoteLogicalInAngle();
 		}
 		const int node = Terminal("binary-expression", Current());
 		Advance();

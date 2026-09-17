@@ -278,6 +278,7 @@ Parser::Parser(const vector<SyntaxToken>& tokens, SyntaxArena& arena)
 	, angle_depth_(0)
 	, nested_delim_(0)
 	, declaration_only_(1)
+	, next_angle_speculative_(false)
 {
 	scopes_.push_back(map<string, int>());
 }
@@ -2332,6 +2333,9 @@ void Parser::EnterAngle()
 {
 	++angle_depth_;
 	nested_delim_ = 0;
+	angle_speculative_.push_back(next_angle_speculative_ ? 1 : 0);
+	angle_logical_.push_back(0);
+	next_angle_speculative_ = false;
 }
 
 void Parser::LeaveAngle()
@@ -2339,6 +2343,14 @@ void Parser::LeaveAngle()
 	if(angle_depth_ > 0)
 	{
 		--angle_depth_;
+	}
+	if(!angle_speculative_.empty())
+	{
+		angle_speculative_.pop_back();
+	}
+	if(!angle_logical_.empty())
+	{
+		angle_logical_.pop_back();
 	}
 	if(angle_depth_ == 0)
 	{
@@ -2356,7 +2368,7 @@ void Parser::CloseAngle()
 	Expect(posttoken::OP_GT, "`>`");
 }
 
-bool Parser::TryTemplateIdTail()
+bool Parser::TryTemplateIdTail(bool speculative)
 {
 	if(!At(posttoken::OP_LT))
 	{
@@ -2364,6 +2376,7 @@ bool Parser::TryTemplateIdTail()
 	}
 	const Mark mark = Take();
 	Advance();
+	next_angle_speculative_ = speculative;
 	EnterAngle();
 	try
 	{
@@ -2521,7 +2534,7 @@ int Parser::UnqualifiedId(const char* tag)
 		{
 			const Mark mark = Take();
 			Advance();
-			if(TryTemplateIdTail())
+			if(TryTemplateIdTail(true))
 			{
 				return Named(tag, JoinedText(start, EndPosition()));
 			}

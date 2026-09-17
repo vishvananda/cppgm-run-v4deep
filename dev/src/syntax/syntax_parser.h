@@ -138,7 +138,7 @@ private:
 	void EnterAngle();
 	void LeaveAngle();
 	void CloseAngle();
-	bool TryTemplateIdTail();
+	bool TryTemplateIdTail(bool speculative = false);
 	void TemplateArgumentList();
 	void TemplateArgument();
 
@@ -188,6 +188,21 @@ private:
 	std::string NestedNameSpecifier(bool& present);
 	int DecltypeSpecifier();
 	bool AtTypeSpecifierStart(std::size_t offset = 0) const;
+	// True when the innermost angle list was opened by a speculative
+	// template-id that has already consumed a logical operator: a `>` there is
+	// then an operator, not the list's closer.
+	bool AngleGuardSuspended() const
+	{
+		return !angle_speculative_.empty() && angle_speculative_.back() != 0 &&
+		       angle_logical_.back() != 0;
+	}
+	void NoteLogicalInAngle()
+	{
+		if(angle_depth_ > 0 && !angle_logical_.empty())
+		{
+			angle_logical_.back() = 1;
+		}
+	}
 
 	// --- names ----------------------------------------------------------
 	int IdExpression(const char* tag);
@@ -241,6 +256,11 @@ private:
 	bool declarator_is_function_;
 	// Nonzero where only a declaration can appear.
 	int declaration_only_;
+	// Per open angle list: whether it came from a speculative template-id, and
+	// whether a `||`, `&&` or `?:` was seen inside it.
+	std::vector<char> angle_speculative_;
+	std::vector<char> angle_logical_;
+	bool next_angle_speculative_;
 };
 
 // Parses one translation unit's tokens and returns the root node, throwing
