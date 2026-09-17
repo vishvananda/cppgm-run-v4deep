@@ -184,6 +184,158 @@ SRC
 extern const int bound;
 int values[bound];
 SRC
+	'union-is-as-large-as-its-largest-member' => [ 'every member of a union is at offset zero (9.5/1)', <<'SRC' ],
+union U { int a; char c[8]; };
+int wide[sizeof(U)];
+int aligned[alignof(U)];
+union V { char c; double d; };
+int padded[sizeof(V)];
+SRC
+	'reference-member-occupies-a-pointer' => [ 'a reference data member is a pointer-sized object (3.9/8)', <<'SRC' ],
+struct S { char c; int &r; double d; };
+int laid_out[sizeof(S)];
+int aligned[alignof(S)];
+SRC
+	'static-member-is-not-part-of-the-object' => [ 'a static data member is not part of the object (9.4.2/1)', <<'SRC' ],
+struct S { static int s; int a; };
+int laid_out[sizeof(S)];
+struct T { static const int t = 3; };
+int empty[sizeof(T)];
+int empty_aligned[alignof(T)];
+SRC
+	'anonymous-union-is-one-member' => [ 'an anonymous union is one member of the class that contains it (9.5/1)', <<'SRC' ],
+struct S { char c; union { int a; char b[8]; }; int z; };
+int laid_out[sizeof(S)];
+SRC
+	'reference-size-is-its-referent' => [ 'sizeof applied to a reference gives the referenced type (5.3.3/2)', <<'SRC' ],
+typedef int& R;
+int bound[sizeof(R)];
+int aligned[alignof(R)];
+SRC
+	'array-of-void-is-rejected' => [ 'the element type of an array shall not be void (8.3.4/1)', <<'SRC' ],
+typedef void V;
+V a[3];
+SRC
+	'array-of-reference-is-rejected' => [ 'there are no arrays of references (8.3.4/1)', <<'SRC' ],
+typedef int& R;
+R a[3];
+SRC
+	'array-of-function-is-rejected' => [ 'there are no arrays of functions (8.3.4/1)', <<'SRC' ],
+typedef int F(int);
+F a[3];
+SRC
+	'cv-qualified-void-array-is-accepted' => [ 'a cv-qualified void is a different type from void', <<'SRC' ],
+typedef const void CV;
+CV a[3];
+SRC
+	'ref-qualified-member-functions' => [ 'a ref-qualifier is part of a member function type (8.3.5/6)', <<'SRC' ],
+struct S {
+  void a() &;
+  void b() &&;
+  void c() const &;
+  void d() const &&;
+  void e() volatile &;
+};
+SRC
+	'ref-qualifier-needs-a-member-function' => [ 'a ref-qualifier makes a function a member function (8.3.5/6)', <<'SRC' ],
+void f() &;
+SRC
+	'ref-qualifier-on-a-free-function-type-is-accepted' => [ 'the rule is about declaring a function, not about the type', <<'SRC' ],
+typedef void F() &;
+SRC
+	'conflicting-function-return-type' => [ 'one signature with two return types is ill formed (13.1/3)', <<'SRC' ],
+int f(int);
+long f(int);
+SRC
+	'overloads-on-qualification-are-accepted' => [ 'a cv-qualifier is part of a member function signature', <<'SRC' ],
+struct S { void f(); void f() const; void f() volatile; };
+SRC
+	'ref-qualified-overloads-are-accepted' => [ 'two ref-qualified members with one parameter list overload', <<'SRC' ],
+struct S { void f() &; void f() &&; void f() const &; void f() const &&; };
+SRC
+	'mixed-ref-qualified-overload-set-is-rejected' => [ 'one parameter list cannot mix ref-qualified members with the rest (13.1/2)', <<'SRC' ],
+struct S { void f(); void f() &; };
+SRC
+	'parameter-adjustment-in-signature-matching' => [ 'an array and a pointer parameter are one signature (8.3.5/5)', <<'SRC' ],
+int f(int*);
+int f(int[]);
+int g(const int);
+int g(int);
+SRC
+	'duplicate-function-definition' => [ 'a function is defined once in a translation unit (3.2/1)', <<'SRC' ],
+int f() { return 1; }
+int f() { return 2; }
+SRC
+	'declaration-then-definition-is-not-a-duplicate' => [ 'a declaration is not a definition', <<'SRC' ],
+int f();
+int f() { return 1; }
+SRC
+	'anonymous-union-with-a-declarator-injects-nothing' => [ '`union { ... } u;` is not an anonymous union (9.5/1)', <<'SRC' ],
+union { int a; char b; } u;
+SRC
+	'union-with-a-declarator-needs-no-static' => [ 'the static requirement is for an anonymous union (9.5/2)', <<'SRC' ],
+union { int a; char b; } u;
+int sized[sizeof(u)];
+SRC
+	'unnamed-enum-in-a-class-keeps-its-name' => [ "a class member's declarator names the object, not the type", <<'SRC' ],
+struct S { enum { A } e; };
+S::e member;
+SRC
+	'unnamed-class-in-a-class-keeps-its-name' => [ "a class member's declarator names the object, not the type", <<'SRC' ],
+struct S { struct { int a; } x; };
+int sized[sizeof(S)];
+SRC
+	'comma-operator-is-a-constant' => [ 'a comma expression is its right operand (5.18/1)', <<'SRC' ],
+int bound[(1, 2)];
+static_assert((1, 1) == 1, "ok");
+SRC
+	'comma-operator-still-evaluates-its-left-operand' => [ 'the discarded operand is evaluated all the same', <<'SRC' ],
+int bound[(1 / 0, 2)];
+SRC
+	'zero-with-a-suffix-is-decimal' => [ 'only a digit after the leading zero makes a literal octal (2.14.2)', <<'SRC' ],
+int bound[0u ? 1 : 2];
+int other[1 + 0u];
+int octal[010];
+SRC
+	'opaque-unscoped-enum-redeclaration-is-rejected' => [ 'a later opaque declaration is ill formed for the same reason (7.2/3)', <<'SRC' ],
+enum E { a };
+enum E;
+SRC
+	'opaque-unscoped-enum-under-a-base-is-rejected' => [ 'an enum-base does not license a later opaque declaration (7.2/3)', <<'SRC' ],
+enum E : int;
+enum E;
+SRC
+	'qualified-elaborated-enum-is-the-enumeration' => [ 'a specifier that only uses the name defines nothing', <<'SRC' ],
+struct S { enum E { a } e; };
+enum S::E *p;
+SRC
+	'decltype-looking-type-name' => [ 'a type whose name begins with `decltype` is an ordinary name', <<'SRC' ],
+typedef int decltype_x;
+decltype_x value;
+SRC
+	'statement-substatements-have-scopes' => [ 'a selection or iteration statement owns a scope (6.4/3)', <<'SRC' ],
+int f() {
+  for(int i = 0; i < 3; ++i) { int j; }
+  if(1) int k;
+  while(1) int l;
+  return 0;
+}
+SRC
+	'for-init-declaration-belongs-to-the-loop' => [ 'a for-init declaration is scoped to the loop (6.5.3/1)', <<'SRC' ],
+int f() {
+  int i;
+  for(int i = 0;;) { }
+  return i;
+}
+SRC
+	'friend-declares-in-the-enclosing-namespace' => [ 'a friend function is a member of the nearest namespace (11.3/6)', <<'SRC' ],
+struct S { friend void f(); };
+void f() { }
+SRC
+	'class-name-is-bound-before-its-body' => [ 'the class name is declared at the class-head (9.2/2)', <<'SRC' ],
+struct S { S *p; };
+struct T { struct U { }; U u; };
+SRC
 );
 
 sub run_tool
