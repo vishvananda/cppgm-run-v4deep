@@ -43,6 +43,15 @@ public:
 	// when the token sequence is not a valid controlling expression.
 	void Evaluate(std::string& out);
 
+private:
+	// A sub-expression's value: always one of the two promoted types the
+	// handout fixes, held as its 64-bit two's complement image.
+	struct Value
+	{
+		unsigned long long bits;
+		bool is_unsigned;
+	};
+
 	// The binary operators the token sequence can carry, and the precedence the
 	// handout's grammar gives each of them (a higher number binds tighter).
 	enum EBinOp
@@ -63,14 +72,14 @@ public:
 		unsigned precedence;
 	};
 
-private:
-	// A sub-expression's value: always one of the two promoted types the
-	// handout fixes, held as its 64-bit two's complement image.
-	struct Value
-	{
-		unsigned long long bits;
-		bool is_unsigned;
-	};
+	// The one table the precedence loop is driven by, in the grammar's order.
+	static const BinOpEntry kBinaryOps[];
+
+	// A signed `+`, `-` or `*` whose mathematical value is not representable in
+	// `intmax_t`, reported rather than wrapped.  The builtins give each operator
+	// that definition directly, so this code never relies on signed overflow of
+	// its own.
+	static bool SignedOverflow(EBinOp op, long long left, long long right, long long& result);
 
 	// The parser is recursive descent, so the C stack grows with the
 	// expression's nesting - an unparenthesised prefix chain and each

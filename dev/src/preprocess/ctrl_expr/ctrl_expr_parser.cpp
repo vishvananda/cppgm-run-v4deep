@@ -20,28 +20,6 @@ using posttoken::ETokenType;
 // precedence level; this is the same information as a table, because the level
 // loop is now one function.  All of these operators are left associative, which
 // is what makes the loop's `precedence + 1` recursion bound correct.
-const CtrlExpression::BinOpEntry kBinaryOps[] =
-{
-	{posttoken::OP_LOR, CtrlExpression::BIN_LOR, 1},
-	{posttoken::OP_LAND, CtrlExpression::BIN_LAND, 2},
-	{posttoken::OP_BOR, CtrlExpression::BIN_OR, 3},
-	{posttoken::OP_XOR, CtrlExpression::BIN_XOR, 4},
-	{posttoken::OP_AMP, CtrlExpression::BIN_AND, 5},
-	{posttoken::OP_EQ, CtrlExpression::BIN_EQ, 6},
-	{posttoken::OP_NE, CtrlExpression::BIN_NE, 6},
-	{posttoken::OP_LT, CtrlExpression::BIN_LT, 7},
-	{posttoken::OP_GT, CtrlExpression::BIN_GT, 7},
-	{posttoken::OP_LE, CtrlExpression::BIN_LE, 7},
-	{posttoken::OP_GE, CtrlExpression::BIN_GE, 7},
-	{posttoken::OP_LSHIFT, CtrlExpression::BIN_SHL, 8},
-	{posttoken::OP_RSHIFT, CtrlExpression::BIN_SHR, 8},
-	{posttoken::OP_PLUS, CtrlExpression::BIN_ADD, 9},
-	{posttoken::OP_MINUS, CtrlExpression::BIN_SUB, 9},
-	{posttoken::OP_STAR, CtrlExpression::BIN_MUL, 10},
-	{posttoken::OP_DIV, CtrlExpression::BIN_DIV, 10},
-	{posttoken::OP_MOD, CtrlExpression::BIN_MOD, 10}
-};
-
 const unsigned kLowestBinaryPrecedence = 1;
 
 // Appends the decimal spelling of an unsigned value, low digit last.  The
@@ -57,24 +35,6 @@ void AppendDecimal(std::string& out, unsigned long long value)
 	} while (value != 0);
 	while (count != 0)
 		out.push_back(digits[--count]);
-}
-
-// A signed `+`, `-` or `*` whose mathematical value is not representable in
-// `intmax_t` is an error, and an unsigned one wraps.  The builtins give each
-// operator that definition directly, so this code never relies on signed
-// overflow of its own.
-bool SignedOverflow(CtrlExpression::EBinOp op, long long left, long long right,
-                    long long& result)
-{
-	switch (op)
-	{
-	case CtrlExpression::BIN_ADD:
-		return __builtin_add_overflow(left, right, &result);
-	case CtrlExpression::BIN_SUB:
-		return __builtin_sub_overflow(left, right, &result);
-	default:
-		return __builtin_mul_overflow(left, right, &result);
-	}
 }
 
 void AppendSigned(std::string& out, unsigned long long bits)
@@ -107,6 +67,42 @@ bool CtrlExpression::IsIdentifierOrKeyword(const CtrlToken& token)
 	if (token.kind == kCtrlIdentifier)
 		return true;
 	return token.kind == kCtrlSimple && IsKeyword(token.simple);
+}
+
+const CtrlExpression::BinOpEntry CtrlExpression::kBinaryOps[] =
+{
+	{posttoken::OP_LOR, CtrlExpression::BIN_LOR, 1},
+	{posttoken::OP_LAND, CtrlExpression::BIN_LAND, 2},
+	{posttoken::OP_BOR, CtrlExpression::BIN_OR, 3},
+	{posttoken::OP_XOR, CtrlExpression::BIN_XOR, 4},
+	{posttoken::OP_AMP, CtrlExpression::BIN_AND, 5},
+	{posttoken::OP_EQ, CtrlExpression::BIN_EQ, 6},
+	{posttoken::OP_NE, CtrlExpression::BIN_NE, 6},
+	{posttoken::OP_LT, CtrlExpression::BIN_LT, 7},
+	{posttoken::OP_GT, CtrlExpression::BIN_GT, 7},
+	{posttoken::OP_LE, CtrlExpression::BIN_LE, 7},
+	{posttoken::OP_GE, CtrlExpression::BIN_GE, 7},
+	{posttoken::OP_LSHIFT, CtrlExpression::BIN_SHL, 8},
+	{posttoken::OP_RSHIFT, CtrlExpression::BIN_SHR, 8},
+	{posttoken::OP_PLUS, CtrlExpression::BIN_ADD, 9},
+	{posttoken::OP_MINUS, CtrlExpression::BIN_SUB, 9},
+	{posttoken::OP_STAR, CtrlExpression::BIN_MUL, 10},
+	{posttoken::OP_DIV, CtrlExpression::BIN_DIV, 10},
+	{posttoken::OP_MOD, CtrlExpression::BIN_MOD, 10}
+};
+
+bool CtrlExpression::SignedOverflow(EBinOp op, long long left, long long right,
+                                     long long& result)
+{
+	switch (op)
+	{
+	case BIN_ADD:
+		return __builtin_add_overflow(left, right, &result);
+	case BIN_SUB:
+		return __builtin_sub_overflow(left, right, &result);
+	default:
+		return __builtin_mul_overflow(left, right, &result);
+	}
 }
 
 bool CtrlExpression::LookupBinOp(ETokenType type, BinOpEntry& entry)
