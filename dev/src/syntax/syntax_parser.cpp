@@ -656,6 +656,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 	const int seq = Tag("decl-specifier-seq");
 	saw_type = false;
 	saw_typedef = false;
+	last_specifier_keyword_type_ = false;
 	for(;;)
 	{
 		SkipAttributes();
@@ -669,6 +670,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 				// the same way a type name does.
 				saw_type = true;
 			}
+			last_specifier_keyword_type_ = IsSimpleTypeSpecifierKind(kind);
 			if(kind == posttoken::KW_TYPEDEF)
 			{
 				saw_typedef = true;
@@ -734,16 +736,17 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		{
 			// A name followed by `::` is a qualified name, and a declaration
 			// is the only reading of one; a plain name needs a category.
-			if(saw_type || (!At(posttoken::OP_COLON2, 1) && declaration_only_ == 0 &&
-			                !IsTypeName(Spelling())))
+			if(saw_type || (!At(posttoken::OP_COLON2, 1) && !At(posttoken::OP_LT, 1) &&
+			                declaration_only_ == 0 && !IsTypeName(Spelling())))
 			{
 				// Once the sequence has a type specifier, a name begins the
 				// declarator: `typedef int FILE` declares `FILE`.
 				break;
 			}
 			const size_t start = Position();
+			const bool template_id = At(posttoken::OP_LT, 1);
 			bool seen = false;
-			QualifiedTypeName(seen, declaration_only_ == 0);
+			QualifiedTypeName(seen, declaration_only_ == 0 && !template_id);
 			if(!seen || At(posttoken::OP_COLON2))
 			{
 				// The `::` after the name belongs to the name that follows it,
@@ -1281,12 +1284,19 @@ int Parser::NonTypeTemplateParameter()
 	const int node = Tag("non-type-template-parameter");
 	bool saw_type = false;
 	bool saw_typedef = false;
-	Add(node, DeclSpecifierSeq(saw_type, saw_typedef));
+	const int specifiers = DeclSpecifierSeq(saw_type, saw_typedef);
+	Add(node, specifiers);
+	// A parameter written as one simple type specifier and no declarator - `int
+	// = 0` - has its default's literal spelled with its token kind in the
+	// dump; every other form spells the literal alone.
+	const bool bare_specifier = specifiers != kNoSyntaxNode &&
+	    arena_.Node(specifiers).children.size() == 1 && last_specifier_keyword_type_;
 	if(At(posttoken::OP_DOTS))
 	{
 		Add(node, Named("parameter-pack", "..."));
 		Advance();
 	}
+	bool has_declarator = false;
 	if(At(kIdentifierToken) || At(posttoken::OP_STAR) || At(posttoken::OP_AMP) ||
 	   At(posttoken::OP_LAND))
 	{
@@ -1295,11 +1305,20 @@ int Parser::NonTypeTemplateParameter()
 			Bind(Spelling(), kNameValue);
 		}
 		Add(node, Declarator());
+		has_declarator = true;
 	}
 	if(Accept(posttoken::OP_ASS))
 	{
 		const int def = Tag("default-template-argument");
-		Add(def, AssignmentExpression());
+		if(bare_specifier && !has_declarator && At(kLiteralToken))
+		{
+			Add(def, Named("literal", "TT_LITERAL:" + Spelling()));
+			Advance();
+		}
+		else
+		{
+			Add(def, AssignmentExpression());
+		}
 		Add(node, def);
 	}
 	return node;

@@ -230,6 +230,8 @@ private:
 	// has to bind it.
 	std::string declarator_name_;
 	std::string last_type_name_;
+	// Whether the last decl-specifier-seq ended in a keyword type specifier.
+	bool last_specifier_keyword_type_;
 	bool declarator_is_function_;
 	// Nonzero where only a declaration can appear.
 	int declaration_only_;
