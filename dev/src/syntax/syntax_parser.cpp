@@ -478,20 +478,16 @@ void Parser::PopScope()
 }
 
 // Forgets the bindings of a scope that no longer exists: undoing them later
-// would reach into whatever scope took its place.
+// would reach into whatever scope took its place.  A scope's bindings are the
+// log's last ones - nothing binds in an outer scope while an inner one is
+// open, and an inner one is dropped before its own scope is - so the log is
+// cut back to where they start rather than filtered.
 void Parser::DropBindings(size_t scope)
 {
-	size_t keep = 0;
-	for(size_t index = 0; index < bindings_.size(); ++index)
+	size_t keep = bindings_.size();
+	while(keep > 0 && bindings_[keep - 1].scope == scope)
 	{
-		if(bindings_[index].scope != scope)
-		{
-			if(keep != index)
-			{
-				bindings_[keep] = bindings_[index];
-			}
-			++keep;
-		}
+		--keep;
 	}
 	bindings_.resize(keep);
 }
