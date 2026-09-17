@@ -1073,15 +1073,12 @@ int Parser::LambdaExpression()
 	Expect(posttoken::OP_LSQUARE, "`[`");
 	if(!At(posttoken::OP_RSQUARE))
 	{
-		if(Accept(posttoken::OP_AMP))
+		// `&` or `=` is a capture-default only where the list can end or a
+		// comma follows; otherwise it begins an ordinary capture.
+		if((At(posttoken::OP_AMP) || At(posttoken::OP_ASS)) &&
+		   (At(posttoken::OP_COMMA, 1) || At(posttoken::OP_RSQUARE, 1)))
 		{
-			if(Accept(posttoken::OP_COMMA))
-			{
-				CaptureList();
-			}
-		}
-		else if(Accept(posttoken::OP_ASS))
-		{
+			Advance();
 			if(Accept(posttoken::OP_COMMA))
 			{
 				CaptureList();
