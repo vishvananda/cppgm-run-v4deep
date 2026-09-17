@@ -630,7 +630,7 @@ bool Parser::CanStartDeclSpecifier() const
 	if(IsSimpleTypeSpecifierKind(kind) || IsCvQualifierKind(kind) ||
 	   IsStorageSpecifierKind(kind) || kind == posttoken::KW_DECLTYPE ||
 	   kind == posttoken::KW_ENUM || IsClassKeyKind(kind) ||
-	   kind == posttoken::OP_COLON2)
+	   kind == posttoken::OP_COLON2 || kind == posttoken::KW_TYPENAME)
 	{
 		return true;
 	}
@@ -706,6 +706,12 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 				Add(seq, ElaboratedTypeSpecifier());
 			}
 			saw_type = true;
+			continue;
+		}
+		if(kind == posttoken::KW_TYPENAME)
+		{
+			// `typename` only marks the name that follows as a type.
+			Advance();
 			continue;
 		}
 		if(kind == posttoken::OP_COLON2)
@@ -1249,6 +1255,11 @@ int Parser::TemplateParameter()
 	bool saw_type = false;
 	bool saw_typedef = false;
 	Add(node, DeclSpecifierSeq(saw_type, saw_typedef));
+	if(At(posttoken::OP_DOTS))
+	{
+		Add(node, Named("parameter-pack", "..."));
+		Advance();
+	}
 	if(At(kIdentifierToken) || At(posttoken::OP_STAR) || At(posttoken::OP_AMP) ||
 	   At(posttoken::OP_LAND))
 	{
@@ -1854,9 +1865,12 @@ int Parser::Declarator()
 	}
 	for(;;)
 	{
+		// A hosted attribute after the declarator-id carries no tree.
+		SkipAttributes();
 		if(At(posttoken::OP_LSQUARE))
 		{
 			Add(node, DeclaratorSuffix(node));
+			declarator_is_function_ = false;
 			continue;
 		}
 		if(At(posttoken::OP_LPAREN))
