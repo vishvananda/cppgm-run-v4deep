@@ -16,6 +16,12 @@
 # generated corpus.  PA2 has no executable output, so only compiler latency and
 # peak RSS are reported.
 #
+# The noise floor is the median absolute deviation of the A/A paired
+# differences, not their min..max range: one delayed run moves the range by
+# hundreds of milliseconds and would let a single outlier either manufacture or
+# mask a result.  The range is still printed, so an excursion larger than the
+# measured effect is visible rather than averaged away.
+#
 # This is a personal benchmark: it is not part of the course contract and is not
 # discovered by `make test`.
 #
@@ -98,6 +104,24 @@ sub summarize
 	return ($median, $sorted[0], $sorted[$count - 1]);
 }
 
+# A robust spread for a paired-difference sample.  One delayed run - a
+# descheduled child, a page-cache miss on the corpus, another process on the
+# machine - moves min..max by hundreds of milliseconds while leaving the body of
+# the sample alone, so the noise floor is taken from the median absolute
+# deviation.  The extremes are still reported, because a single excursion past
+# the measured effect is exactly what an A/A arm exists to expose.
+sub robust_spread
+{
+	my ($values) = @_;
+	my @sorted = sort { $a <=> $b } map { abs($_) } @{$values};
+	my $count = scalar(@sorted);
+	my $mad = $count % 2 ? $sorted[($count - 1) / 2]
+		: ($sorted[$count / 2 - 1] + $sorted[$count / 2]) / 2;
+	my ($median, $min, $max) = summarize($values);
+	my $negative = scalar(grep { $_ < 0 } @{$values});
+	return ($median, $min, $max, $mad, $negative, $count);
+}
+
 sub run_arm
 {
 	my ($label, $tool, $input, $samples, $arm) = @_;
@@ -167,7 +191,7 @@ close($sf);
 
 sub report_arm
 {
-	my ($title, $samples, $diffs) = @_;
+	my ($title, $samples, $diffs, $label_name) = @_;
 	print "$title ($blocks ABBA blocks, ", 4 * $blocks, " timed runs per label)\n";
 	for my $label ('ref', 'mine')
 	{
@@ -177,16 +201,39 @@ sub report_arm
 			$label, $time, $time_min, $time_max,
 			$rss / 1024, $rss_min / 1024, $rss_max / 1024;
 	}
-	my ($median, $min, $max) = summarize($diffs);
-	printf "  paired per-block difference (mine - ref) median %+0.4f s [%+0.4f..%+0.4f]\n",
-		$median, $min, $max;
-	return ($median, $min, $max);
+	my ($median, $min, $max, $mad, $negative, $count) = robust_spread($diffs);
+	printf "  paired per-block difference (%s) median %+0.4f s [%+0.4f..%+0.4f]\n",
+		$label_name, $median, $min, $max;
+	printf "  median absolute difference %0.4f s; %d of %d blocks negative\n",
+		$mad, $negative, $count;
+	return ($median, $min, $max, $mad, $negative, $count);
 }
 
 print "\n";
-my ($ab_median, $ab_min, $ab_max) = report_arm("A/B", \%ab, \@ab_diff);
+my ($ab_median, $ab_min, $ab_max, $ab_mad, $ab_negative, $ab_count) =
+	report_arm("A/B", \%ab, \@ab_diff, "mine - ref");
 print "\n";
-my ($aa_median, $aa_min, $aa_max) = report_arm("A/A noise calibration", \%aa, \@aa_diff);
-printf "\nnoise floor (A/A spread): %0.4f s; measured A/B difference: %+0.4f s\n",
-	$aa_max - $aa_min, $ab_median;
+my ($aa_median, $aa_min, $aa_max, $aa_mad, $aa_negative, $aa_count) =
+	report_arm("A/A noise calibration", \%aa, \@aa_diff, "ref - ref");
+my $aa_worst = abs($aa_min) > abs($aa_max) ? abs($aa_min) : abs($aa_max);
+printf "\nnoise floor: A/A median absolute difference %0.4f s, worst observed excursion %0.4f s\n",
+	$aa_mad, $aa_worst;
+printf "measured A/B difference: %+0.4f s with %d of %d blocks negative\n",
+	$ab_median, $ab_negative, $ab_count;
+# The direct question: did the reference differ from itself, under the same
+# ABBA schedule, by as much as the effect the A/B arm claims?  A noise sample
+# that reaches the effect means the effect is not separable from the schedule.
+my $aa_reaching = scalar(grep { abs($_) >= abs($ab_median) } @aa_diff);
+printf "A/A blocks whose |difference| reached the measured A/B effect: %d of %d\n",
+	$aa_reaching, $aa_count;
+if (abs($ab_median) > $aa_worst && $ab_negative == $ab_count && $aa_reaching == 0 && $ab_count > 1)
+{
+	print "verdict: every A/B block moved the same way, by more than the largest\n";
+	print "         excursion the reference produced against itself.\n";
+}
+else
+{
+	print "verdict: the A/B difference is not separable from the schedule noise;\n";
+	print "         treat it as unresolved.\n";
+}
 print "all observations: $samples_path\n";

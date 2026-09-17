@@ -7,6 +7,15 @@
 # is not part of the course contract and is not discovered by `make test`.
 #
 #   perl student.tests/posttoken_differential.pl [iterations] [seed]
+#
+# One divergence is expected and is not a bug here.  A phase 2 splice inside a
+# `\u` escape - `printf '"\\u\\\n0041"\n'` - is a valid literal naming `A`
+# (2.2/1.2 deletes the backslash-newline, 2.14.3 makes the result a c-char) and
+# g++ compiles it, but the reference's phase 1 wants the hex digits contiguous
+# and its phase 3 escape scan has no `\u` case, so it reports a phase 3 error.
+# The decision to follow the standard rather than the reference is recorded in
+# pa2/plan.md (finding A7); no atom or curated input below produces that shape,
+# so a run that reports one mismatch on it is reporting exactly this entry.
 
 use strict;
 use warnings;
@@ -157,6 +166,40 @@ my @curated = (
 	"#include <a>\n", "#include \"a\"\n", "<a>\n", "\"a\"\n",
 	# an empty translation unit still ends with eof
 	"", "\n", " ", "//c", "/*c*/",
+
+	# A raw-string `d-char` may be a double quote: 2.14.5 excludes only space,
+	# the parentheses, the backslash and four control characters, so `a"b` is
+	# a delimiter and the closing scan has to find `)a"b"`.
+	"R\"a\"b(x)a\"b\"\n", "R\"a\"b(x)a\"b\"_x\n", "u8R\"\"(x)\"\"\n",
+	"R\"\"(x)\"\"\n", "R\"a\"b(x)a\"b\" \"c\"\n", "R\"a\"b(a)b)x)a\"b\"\n",
+
+	# The 16-character delimiter limit is kept in two counts: more than 16 code
+	# points is the `too long` error, at most 16 code points but more than 16
+	# bytes makes the whole raw-string source one invalid token.  The units
+	# only differ for a delimiter the standard's basic source character set
+	# does not contain at all.
+	"R\"\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+		. "(y)\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\"\n",
+	"R\"\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9"
+		. "(y)\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\"\n",
+	"R\"" . ("a" x 16) . "(y)" . ("a" x 16) . "\"\n",
+	"R\"" . ("a" x 17) . "(y)" . ("a" x 17) . "\"\n",
+	"R\"\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC"
+		. "(y)\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\"\n",
+	"R\"\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC"
+		. "(y)\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\"\n",
+
+	# A NUL after a backslash is accepted by the phase 3 escape scan and refused
+	# at phase 7, which is what the reference reports; `"\p"` stays a phase 3
+	# error in both, and a NUL anywhere else is an ordinary character.
+	"\"\\\0\"\n", "\"\\\0\\\0\"\n", "'\\\0'\n", "u\"\\\0\"\n", "L\"\\\0\"\n",
+	"\"a\0b\"\n", "\"\\p\"\n", "\"\\8\"\n", "a\0b\n",
+
+	# A hexadecimal floating-literal is read as a `long double` and narrowed:
+	# `0x1.0000000000000801p0` is 1 + 2049/2^64, which rounds twice.  These are
+	# the smallest cases for `double`, `float` and the subnormal range.
+	"0x1.0000000000000801p0\n", "0x1.0000010000000001p0f\n",
+	"0xa.FFFFFFFFFFFFFFFFFFFFp-1075\n", "0x1.0000000000000001p-1075\n",
 );
 
 sub make_input
