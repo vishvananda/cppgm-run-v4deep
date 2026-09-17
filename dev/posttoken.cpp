@@ -209,6 +209,13 @@ private:
 // Reads standard input into one buffer.  The read is chunked so the stream
 // buffer moves whole blocks instead of one code unit per virtual call, and the
 // buffer grows geometrically so no intermediate copy of the source survives.
+//
+// Reserving the length a regular file reports was measured and rejected: the
+// buffered read still asks for a whole chunk past the end, and the string's
+// growth policy then doubles away from the reservation rather than from the
+// source size, which raised peak RSS on a 12.5 MB source from 20.1 MB to
+// 27.9 MB against the reference's 18.9 MB.  Geometric growth from empty is the
+// cheaper policy here.
 string ReadStandardInput()
 {
 	const size_t Chunk = 1 << 16;

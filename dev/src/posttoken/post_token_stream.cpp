@@ -103,9 +103,10 @@ void PostTokenStream::EmitPPNumber(const std::string& spelling)
 	}
 	case NUM_FLOATING:
 	{
-		std::string text(spelling, 0, spelling.size());
+		// The scan leaves `text` untouched, so it reads the spelling in place
+		// rather than paying a copy on every floating-literal token.
 		std::string bytes;
-		ScanFloatingLiteral(literal.integer_type, text, bytes);
+		ScanFloatingLiteral(literal.integer_type, spelling, bytes);
 		sink_.EmitLiteral(spelling, literal.integer_type, bytes);
 		return;
 	}
@@ -131,12 +132,14 @@ void PostTokenStream::EmitCharacterLiteral(const std::string& spelling, bool use
 	std::string suffix;
 	if (user_defined)
 	{
-		suffix.assign(spelling, split.suffix_begin, std::string::npos);
-		if (!IsAcceptableUDSuffix(suffix))
+		// The refusal is decided from the spelling, so an unusable suffix never
+		// builds the string it would have been reported under.
+		if (split.suffix_begin < spelling.size() && spelling[split.suffix_begin] != '_')
 		{
 			sink_.EmitInvalid(spelling);
 			return;
 		}
+		suffix.assign(spelling, split.suffix_begin, std::string::npos);
 	}
 
 	unsigned long long code_point = 0;
@@ -228,12 +231,20 @@ void PostTokenStream::FlushGroup()
 		if (literal.has_suffix)
 		{
 			// The suffix is this literal's own tail, not the rest of the group.
-			std::string current = group_text_.substr(literal.suffix_begin,
-			                                         literal.spelling_end - literal.suffix_begin);
-			if (suffix_seen && suffix != current)
+			// Only the first spelling is materialised: the group carries one
+			// suffix value or none, so a later element only has to agree with
+			// it, and comparing against the buffer costs no allocation.
+			const std::size_t length = literal.spelling_end - literal.suffix_begin;
+			if (!suffix_seen)
+			{
+				suffix.assign(group_text_, literal.suffix_begin, length);
+				suffix_seen = true;
+			}
+			else if (suffix.size() != length ||
+				group_text_.compare(literal.suffix_begin, length, suffix) != 0)
+			{
 				suffix_conflict = true;
-			suffix = current;
-			suffix_seen = true;
+			}
 		}
 	}
 
