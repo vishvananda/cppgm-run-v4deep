@@ -142,15 +142,16 @@ short enough not to round at 80 bits, which is why `0x1.8p3`, `0x1p1024`,
 least 16 fractional hexadecimal digits landing near a halfway point.
 
 The reference's value is the double-rounded one and the stage's was the
-correctly rounded one, so this is *not* a case where the reference is
-demonstrably wrong and may be corrected: 2.14.4 does require the correctly
-rounded value, but the handout's PA2 output rule is "bit-perfect compatibility
-with test harness and reference implementation", the comparison oracle is the
-reference's byte image, and no checked-in fixture exercises the class.  The
-reference is therefore preserved and the deviation is documented at the
-conversion site.  Decimal literals are unaffected - the reference's decimal
-result is the correctly rounded one - and neither is `long double`, where both
-sides use `strtold`.
+correctly rounded one: 2.14.4 requires the correctly rounded value, so the
+reference is the non-conforming side.  Unlike A7 this one is copied anyway,
+because the two cases differ in what is at stake.  Here the *output* is the
+thing being compared - the handout's PA2 rule is "bit-perfect compatibility
+with test harness and reference implementation", the oracle is the reference's
+byte image, and no checked-in fixture exercises the class - so matching costs
+nothing that any requirement asks for, while the exception for correcting a
+proven-wrong reference exists for outputs that a required behaviour depends on.
+Decimal literals are unaffected (the reference's decimal result *is* the
+correctly rounded one) and so is `long double`, where both sides use `strtold`.
 
 ### A3 - per-token allocations in the post-token pass
 
@@ -418,3 +419,14 @@ of the phase 4-7 token mix.  `student.tests/posttoken_benchmark.pl 40000 12`.
     supported either way (0.0336 s against a 0.0059 s A/A range), so it was left
     untouched rather than reopening a closed stage; a later stage that
     re-derives either number should use the robust statistic.
+  - **A7 is a deliberate divergence.**  A later stage that meets a phase 2
+    splice inside a `\u` escape must not "fix" it by copying the reference: the
+    input is a valid program (2.2/1.2, 2.14.3, g++), the reference rejects it,
+    and the reasons are in A7.  It is the only input class where this stage and
+    the reference disagree.
+  - **The two count-based phase-3 rules** in A5 and A6 reproduce reference
+    behaviour on inputs whose treatment is implementation-defined rather than
+    standard-defined (2.14.5 `d-char` outside the basic source character set;
+    2.2/1.1's mapping of a physical source character).  A later stage that
+    widens those character sets should revisit them rather than assume they are
+    language rules.
