@@ -1403,33 +1403,53 @@ int Parser::ClassMember()
 	bool saw_type = false;
 	bool saw_typedef = false;
 	const int specifiers = DeclSpecifierSeq(saw_type, saw_typedef);
-	if(specifiers != kNoSyntaxNode && At(posttoken::OP_COLON))
+	if(specifiers != kNoSyntaxNode)
 	{
-		// A bit-field declaration.
-		const int node = Tag("bit-field-declaration");
-		Add(node, specifiers);
-		const int list = Tag("bit-field-declarator-list");
-		for(;;)
+		int declarator = kNoSyntaxNode;
+		if(!At(posttoken::OP_COLON))
 		{
-			const int field = Tag("bit-field-declarator");
-			if(!At(posttoken::OP_COLON))
+			try
 			{
-				const int declarator = Tag("declarator");
-				Add(declarator, Named("identifier", Spelling()));
-				Expect(kIdentifierToken, "a member name");
-				Add(field, declarator);
+				declarator = Declarator();
+			}
+			catch(const SyntaxError&)
+			{
+				declarator = kNoSyntaxNode;
+			}
+		}
+		if(At(posttoken::OP_COLON))
+		{
+			// A bit-field declaration: the declarator, when written, is the
+			// field's name.
+			const int node = Tag("bit-field-declaration");
+			Add(node, specifiers);
+			int field_declarator = declarator;
+			if(field_declarator == kNoSyntaxNode && !At(posttoken::OP_COLON))
+			{
+				field_declarator = Declarator();
+			}
+			const int field = Tag("bit-field-declarator");
+			if(field_declarator != kNoSyntaxNode)
+			{
+				Add(field, field_declarator);
 			}
 			Expect(posttoken::OP_COLON, "`:`");
 			Add(field, AssignmentExpression());
-			Add(list, field);
-			if(!Accept(posttoken::OP_COMMA))
+			Add(node, field);
+			while(Accept(posttoken::OP_COMMA))
 			{
-				break;
+				const int next_field = Tag("bit-field-declarator");
+				if(!At(posttoken::OP_COLON))
+				{
+					Add(next_field, Declarator());
+				}
+				Expect(posttoken::OP_COLON, "`:`");
+				Add(next_field, AssignmentExpression());
+				Add(node, next_field);
 			}
+			Expect(posttoken::OP_SEMICOLON, "`;`");
+			return node;
 		}
-		Expect(posttoken::OP_SEMICOLON, "`;`");
-		Add(node, list);
-		return node;
 	}
 	Rollback(mark);
 	return Declaration();

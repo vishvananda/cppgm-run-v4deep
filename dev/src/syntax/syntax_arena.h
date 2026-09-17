@@ -84,7 +84,7 @@ public:
 
 	void AddChild(int parent, int child)
 	{
-		if(parent != kNoSyntaxNode && child != kNoSyntaxNode)
+		if(parent != kNoSyntaxNode && child != kNoSyntaxNode && parent != child)
 		{
 			nodes_[static_cast<std::size_t>(parent)].children.push_back(child);
 		}

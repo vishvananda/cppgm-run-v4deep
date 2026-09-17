@@ -247,14 +247,41 @@ int Parser::IterationStatement()
 	const int node = Tag("for-statement");
 	Expect(posttoken::KW_FOR, "`for`");
 	Expect(posttoken::OP_LPAREN, "`(`");
-	const int init = Tag("for-init-statement");
+	int init = Tag("for-init-statement");
 	if(At(posttoken::OP_SEMICOLON))
 	{
 		Advance();
 	}
 	else if(StartsDeclarationStatement())
 	{
-		Add(init, Declaration());
+		// A `for` init that is a declaration stops at `:` when the range form
+		// follows, and at `;` otherwise.
+		const Mark mark = Take();
+		bool range = false;
+		try
+		{
+			bool saw_type = false;
+			bool saw_typedef = false;
+			const int specifiers = DeclSpecifierSeq(saw_type, saw_typedef);
+			const int declarator = Declarator();
+			if(specifiers != kNoSyntaxNode && At(posttoken::OP_COLON))
+			{
+				Add(init, specifiers);
+				Add(init, declarator);
+				Bind(declarator_name_, saw_typedef ? kNameType : kNameValue);
+				range = true;
+			}
+		}
+		catch(const SyntaxError&)
+		{
+			range = false;
+		}
+		if(!range)
+		{
+			Rollback(mark);
+			init = Tag("for-init-statement");
+			Add(init, Declaration());
+		}
 	}
 	else
 	{
