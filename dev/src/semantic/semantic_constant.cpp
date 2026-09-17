@@ -427,8 +427,17 @@ Constant Analyzer::EvaluateCall(int node, int scope)
 	{
 		return result;
 	}
-	const int target = ResolveTypeName(scope, Label(callee), false, false);
-	const Type& type = model_.Get(target);
+	// A callee that names no type is an ordinary call, which this subset does
+	// not evaluate; only a type name is a conversion of the argument.
+	string qualifier;
+	string name;
+	SplitQualifiedName(Label(callee), qualifier, name);
+	const int target = qualifier.empty() ? model_.LookupTypeUnqualified(scope, name) : -1;
+	if(target < 0)
+	{
+		return result;
+	}
+	const Type& type = model_.Get(model_.EntityOf(target).type);
 	if(type.kind != kTypeFundamental ||
 	   !posttoken::FundamentalTypeIsIntegral(
 	       static_cast<posttoken::EFundamentalType>(type.base)))

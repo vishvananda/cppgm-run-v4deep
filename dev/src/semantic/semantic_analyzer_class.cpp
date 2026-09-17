@@ -214,9 +214,7 @@ int Analyzer::DeclareClass(int scope, const string& written, int key, bool has_b
 	}
 	if(has_body)
 	{
-		const int class_scope = model_.ScopeFor(scope, entity, kScopeClass, written);
-		model_.Get(model_.EntityOf(entity).type).complete = true;
-		(void)class_scope;
+		(void)model_.ScopeFor(scope, entity, kScopeClass, written);
 	}
 	return entity;
 }
@@ -240,8 +238,15 @@ int Analyzer::AnalyzeClassSpecifier(int node, int scope, int enclosing_class,
 		written = declared_name.empty() ? AnonymousClassName(node) : declared_name;
 	}
 	const int entity = DeclareClass(scope, written, key, true);
+	if(model_.Get(model_.EntityOf(entity).type).complete)
+	{
+		throw SemanticError("redefinition of `" + written + "`");
+	}
 	const int class_scope = model_.ScopeFor(scope, entity, kScopeClass, written);
 	ProcessClassBody(node, class_scope);
+	// 9.4/1: the class is complete at the closing brace, so a member body may
+	// name a member declared later in it.
+	model_.Get(model_.EntityOf(entity).type).complete = true;
 	// An anonymous class that no declaration names keeps its synthetic name for
 	// its own scope only; nothing binds it.
 	if(!anonymous || !declared_name.empty())
@@ -279,10 +284,10 @@ void Analyzer::InjectUnionMembers(int class_scope, int scope)
 
 void Analyzer::ProcessClassBody(int node, int class_scope)
 {
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(tag == "class-key" || tag == "base-clause" || tag == "access-specifier" ||
 		   tag == "empty-declaration")
@@ -347,13 +352,13 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	// follow it.
 	int base_node = -1;
 	{
-		const size_t children = ChildCount(node);
-		for(size_t index = 0; index < children; ++index)
+		const vector<int> children = ChildrenOf(node);
+		for(size_t index = 0; index < children.size(); ++index)
 		{
-			const int child = ChildAt(node, index);
+			const int child = children[index];
 			if(Tag(child) == "enum-key")
 			{
-				const int next = ChildAt(node, index + 1);
+				const int next = index + 1 < children.size() ? children[index + 1] : -1;
 				base_node = Tag(next) == "type-id" ? next : -1;
 				break;
 			}
@@ -413,12 +418,20 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	}
 	const int canonical = model_.EntityOf(entity).type;
 
-	// A fixed underlying type may be given once (7.2/2); a second, different
-	// one is ill formed.
+	// 7.2/2: the first declaration fixes the underlying type, which is the
+	// type its enumerators need when no enum-base says otherwise.  A later
+	// declaration that names a different one is ill formed.
 	int underlying = -1;
 	if(has_base)
 	{
 		underlying = BuildDeclarator(base_node, -1, scope);
+	}
+	else if(model_.Get(canonical).underlying < 0)
+	{
+		underlying = model_.Fundamental(posttoken::FT_INT);
+	}
+	if(underlying >= 0)
+	{
 		Type& record = model_.Get(canonical);
 		if(record.underlying >= 0 && record.underlying != underlying)
 		{
@@ -456,7 +469,9 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 	// members of the scope that contains it (7.2/11), which the dump shows by
 	// printing them there and no scope of their own.
 	const int enum_scope = scoped ? model_.ScopeFor(scope, entity, kScopeEnum, written) : scope;
-	if(declare && (!anonymous || !declared_name.empty()))
+	// An enumeration binds its name in a scope once: a later declaration of the
+	// same enumeration in the same scope adds no second line.
+	if(declare && created && (!anonymous || !declared_name.empty()))
 	{
 		AddTypeBinding(scope, written, entity, -1, key);
 	}
@@ -481,10 +496,10 @@ int Analyzer::AnalyzeEnumSpecifier(int node, int scope, bool declare,
 void Analyzer::BindEnumerators(int node, int enum_scope, int enum_type)
 {
 	long long next = 0;
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		if(Tag(child) != "enumerator")
 		{
 			continue;
@@ -535,10 +550,10 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 	{
 		return;
 	}
-	const size_t count = ChildCount(list);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(list);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int init = ChildAt(list, index);
+		const int init = children[index];
 		const int declarator = ChildAt(init, 0);
 		const int initializer = ChildCount(init) > 1 ? ChildAt(init, 1) : -1;
 		string full;
@@ -595,6 +610,11 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 		if(reference && initializer < 0 && !spec.is_extern && enclosing_class < 0)
 		{
 			throw SemanticError("a reference must be initialized");
+		}
+		if(!spec.is_extern && model_.Get(type).kind == kTypeClass &&
+		   !model_.Get(type).complete)
+		{
+			throw SemanticError("an object cannot be defined with an incomplete type");
 		}
 		const int entity = FindOrCreateObject(target, name, type);
 		Binding binding;
@@ -746,10 +766,10 @@ bool Analyzer::IsStatementTag(const string& tag) const
 void Analyzer::AnalyzeCompoundStatement(int node, int scope)
 {
 	const int block = model_.NewScope(kScopeBlock, "", scope);
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(IsDeclarationTag(tag))
 		{
@@ -783,10 +803,10 @@ void Analyzer::ScanCalls(int node, int scope)
 	{
 		NoteClassCall(node, scope);
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		ScanCalls(ChildAt(node, index), scope);
+		ScanCalls(children[index], scope);
 	}
 }
 
@@ -839,10 +859,10 @@ void Analyzer::AnalyzeStatement(int node, int scope)
 		AnalyzeCompoundStatement(node, scope);
 		return;
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(IsDeclarationTag(tag))
 		{

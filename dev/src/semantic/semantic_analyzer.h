@@ -108,6 +108,7 @@ public:
 	const std::string& Label(int node) const;
 	std::size_t ChildCount(int node) const;
 	int ChildAt(int node, std::size_t index) const;
+	std::vector<int> ChildrenOf(int node) const;
 	int FindChild(int node, const char* tag) const;
 	bool HasChild(int node, const char* tag) const;
 	bool IsTag(int node, const char* tag) const;

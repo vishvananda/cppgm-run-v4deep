@@ -179,6 +179,21 @@ public:
 		return count;
 	}
 
+	// Every child of `node`, in order, in one pass over the chain.  The chain
+	// runs backwards, so walking to the `index`-th child costs a count and a
+	// walk; a caller that wants all of them pays for both once here instead.
+	void CollectChildren(int node, std::vector<int>& out) const
+	{
+		const std::size_t count = ChildCount(node);
+		out.resize(count);
+		int edge = nodes_[static_cast<std::size_t>(node)].last_child;
+		for(std::size_t remaining = count; remaining > 0; --remaining)
+		{
+			out[remaining - 1] = edges_[static_cast<std::size_t>(edge)].child;
+			edge = edges_[static_cast<std::size_t>(edge)].previous;
+		}
+	}
+
 	// The `index`-th child of `node`, counted from the first.  The chain runs
 	// backwards, so this walks to the child that many places from the end.
 	int ChildAt(int node, std::size_t index) const

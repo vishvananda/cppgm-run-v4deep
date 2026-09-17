@@ -54,10 +54,11 @@ bool HasParameterPack(const syntax::SyntaxArena& arena, int node)
 	{
 		return false;
 	}
-	const size_t count = arena.ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	std::vector<int> children;
+	arena.CollectChildren(node, children);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		if(HasParameterPack(arena, arena.ChildAt(node, index)))
+		if(HasParameterPack(arena, children[index]))
 		{
 			return true;
 		}
@@ -151,10 +152,10 @@ void Analyzer::CollectDeclaratorName(int node, string& name)
 	{
 		return;
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(tag == "identifier")
 		{
@@ -280,15 +281,15 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Speci
 	vector<string> words;
 	int quals = 0;
 	int named_type = -1;
-	const size_t count = ChildCount(node);
+	const vector<int> children = ChildrenOf(node);
 	// The class or enum a declaration introduces is named by the declaration's
 	// first declarator only when it is the type that declaration gives the
 	// name: `typedef class { int c; } C;` names the class C, while a specifier
 	// a later type specifier overrides keeps its anonymous name.
 	size_t last_type = static_cast<size_t>(-1);
-	for(size_t index = 0; index < count; ++index)
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(tag == "class-specifier" || tag == "enum-specifier" ||
 		   tag == "decltype-specifier" || tag == "class-forward-declaration" ||
@@ -307,9 +308,9 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, int enclosing_class, Speci
 			}
 		}
 	}
-	for(size_t index = 0; index < count; ++index)
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		const string& label = Label(child);
 		if(tag == "decl-specifier" || tag == "type-specifier" || tag == "cv-qualifier" ||
@@ -475,10 +476,10 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	vector<int> operator_quals;
 	vector<int> suffixes;
 	int nested = -1;
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& child_tag = Tag(child);
 		if(child_tag == "ptr-operator")
 		{
@@ -575,10 +576,10 @@ int Analyzer::BuildParameterClause(int node, int scope, vector<int>& params, boo
 	{
 		return 0;
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		const string& tag = Tag(child);
 		if(tag == "parameter-pack")
 		{

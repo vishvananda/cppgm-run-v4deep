@@ -57,6 +57,13 @@ int Analyzer::ChildAt(int node, size_t index) const
 	return arena_.ChildAt(node, index);
 }
 
+vector<int> Analyzer::ChildrenOf(int node) const
+{
+	vector<int> children;
+	arena_.CollectChildren(node, children);
+	return children;
+}
+
 bool Analyzer::IsTag(int node, const char* tag) const
 {
 	return node >= 0 && Tag(node) == tag;
@@ -64,13 +71,12 @@ bool Analyzer::IsTag(int node, const char* tag) const
 
 int Analyzer::FindChild(int node, const char* tag) const
 {
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
-		if(Tag(child) == tag)
+		if(Tag(children[index]) == tag)
 		{
-			return child;
+			return children[index];
 		}
 	}
 	return -1;
@@ -84,10 +90,10 @@ bool Analyzer::HasChild(int node, const char* tag) const
 void Analyzer::Run(int root)
 {
 	const int global = model_.GlobalScope();
-	const size_t count = ChildCount(root);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(root);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		AnalyzeDeclaration(ChildAt(root, index), global, -1);
+		AnalyzeDeclaration(children[index], global, -1);
 	}
 }
 
@@ -236,10 +242,10 @@ void Analyzer::AnalyzeNamespaceDefinition(int node, int scope)
 			list.push_back(target);
 		}
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		if(IsTag(child, "inline"))
 		{
 			continue;
@@ -383,10 +389,10 @@ void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_cla
 		const int list = FindChild(clause, "template-parameter-list");
 		if(list >= 0)
 		{
-			const size_t count = ChildCount(list);
-			for(size_t index = 0; index < count; ++index)
+			const vector<int> children = ChildrenOf(list);
+			for(size_t index = 0; index < children.size(); ++index)
 			{
-				const int parameter = ChildAt(list, index);
+				const int parameter = children[index];
 				if(!IsTag(parameter, "type-parameter"))
 				{
 					continue;
@@ -408,10 +414,10 @@ void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_cla
 			}
 		}
 	}
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		const int child = ChildAt(node, index);
+		const int child = children[index];
 		if(IsTag(child, "template-parameter-clause"))
 		{
 			continue;
@@ -422,10 +428,10 @@ void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_cla
 
 void Analyzer::AnalyzeLinkageSpecification(int node, int scope, int enclosing_class)
 {
-	const size_t count = ChildCount(node);
-	for(size_t index = 0; index < count; ++index)
+	const vector<int> children = ChildrenOf(node);
+	for(size_t index = 0; index < children.size(); ++index)
 	{
-		AnalyzeDeclaration(ChildAt(node, index), scope, enclosing_class);
+		AnalyzeDeclaration(children[index], scope, enclosing_class);
 	}
 }
 
