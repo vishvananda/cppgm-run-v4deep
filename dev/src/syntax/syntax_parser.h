@@ -179,7 +179,7 @@ private:
 
 	// --- names ----------------------------------------------------------
 	int IdExpression(const char* tag);
-	int UnqualifiedId(const char* tag);
+	int UnqualifiedId(const char* tag, bool qualified = false, bool template_keyword = false);
 	bool AtConversionTypeStart() const;
 	std::string TextAt(std::size_t index) const;
 
