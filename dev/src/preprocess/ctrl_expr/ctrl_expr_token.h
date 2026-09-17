@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 #include "posttoken/simple_token.h"
 
@@ -20,7 +21,7 @@ namespace cppgm
 namespace preprocess
 {
 
-enum ECtrlTokenKind
+enum ECtrlTokenKind : std::uint8_t
 {
 	// An integral-literal: `bits` holds its value already promoted to
 	// `intmax_t`/`uintmax_t`, and `is_unsigned` says which of the two it is.
@@ -33,14 +34,17 @@ enum ECtrlTokenKind
 
 struct CtrlToken
 {
-	ECtrlTokenKind kind;
-
-	// `kCtrlSimple`: the punctuator or keyword type.
-	posttoken::ETokenType simple;
-
 	// `kCtrlLiteral`: the literal's value, sign-extended to 64 bits when its
 	// type is signed.
 	unsigned long long bits;
+
+	// `kCtrlSimple`: the punctuator or keyword type.  The course table has well
+	// under a thousand enumerators and a line has one record per token, so the
+	// field is the narrowest type that holds them: the record is 16 bytes rather
+	// than 24, and the token vector of a long line is a third smaller.
+	unsigned short simple;
+
+	ECtrlTokenKind kind;
 
 	// `kCtrlLiteral`: the literal's promoted type is unsigned.
 	bool is_unsigned;
@@ -51,6 +55,13 @@ struct CtrlToken
 	// `kCtrlIdentifier`/`kCtrlSimple`: the handout's mock `IsDefinedIdentifier`
 	// result for this token's spelling.
 	bool defined_mock;
+
+	// The `kCtrlSimple` token type, as the enumerator the operator tables are
+	// keyed by.
+	posttoken::ETokenType SimpleType() const
+	{
+		return static_cast<posttoken::ETokenType>(simple);
+	}
 };
 
 // The PA3 handout's mock for the `defined` operator: as no macros are defined

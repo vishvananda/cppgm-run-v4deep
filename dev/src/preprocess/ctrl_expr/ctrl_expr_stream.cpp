@@ -21,7 +21,7 @@ void CtrlExprSink::EmitSimple(const std::string& source, ETokenType type)
 {
 	CtrlToken token;
 	token.kind = kCtrlSimple;
-	token.simple = type;
+	token.simple = static_cast<unsigned short>(type);
 	token.bits = 0;
 	token.is_unsigned = false;
 	token.is_defined_word = false;
@@ -35,7 +35,7 @@ void CtrlExprSink::EmitIdentifier(const std::string& source)
 {
 	CtrlToken token;
 	token.kind = kCtrlIdentifier;
-	token.simple = posttoken::ETOKENTYPE_COUNT;
+	token.simple = static_cast<unsigned short>(posttoken::ETOKENTYPE_COUNT);
 	token.bits = 0;
 	token.is_unsigned = false;
 	// `defined` is not a keyword of the course table, so the operator arrives
@@ -77,7 +77,7 @@ void CtrlExprSink::EmitLiteral(const std::string&, EFundamentalType type,
 
 	CtrlToken token;
 	token.kind = kCtrlLiteral;
-	token.simple = posttoken::ETOKENTYPE_COUNT;
+	token.simple = static_cast<unsigned short>(posttoken::ETOKENTYPE_COUNT);
 	token.bits = value;
 	token.is_unsigned = is_unsigned;
 	token.is_defined_word = false;
@@ -137,8 +137,7 @@ void CtrlExprSink::EndOfLine()
 	}
 	else
 	{
-		CtrlExpression expression(tokens_.data(), tokens_.size());
-		expression.Evaluate(buffer_);
+		expression_.Evaluate(tokens_.data(), tokens_.size(), buffer_);
 	}
 	EndLine();
 

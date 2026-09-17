@@ -12,7 +12,9 @@
 // but the records the grammar reads is retained: an identifier's spelling is
 // not copied, because the two facts derived from it (`is_defined_word` and the
 // mock `defined` result) are decided while the callback's spelling is still
-// alive.
+// alive.  The evaluator the line is handed to owns the two stacks the parse
+// works on, so one object serves every line and their capacity is kept with the
+// vector's.
 
 #pragma once
 
@@ -25,6 +27,7 @@
 #include "posttoken/post_token_sink.h"
 #include "posttoken/post_token_stream.h"
 #include "posttoken/simple_token.h"
+#include "preprocess/ctrl_expr/ctrl_expr_parser.h"
 #include "preprocess/ctrl_expr/ctrl_expr_token.h"
 #include "preprocess/tokens/IPPTokenStream.h"
 
@@ -79,6 +82,9 @@ private:
 
 	std::ostream& out_;
 	std::vector<CtrlToken> tokens_;
+	// One evaluator for the whole run: its value and operator stacks keep their
+	// capacity across lines the way `tokens_` does.
+	CtrlExpression expression_;
 	std::string buffer_;
 	// The line's emit-time rejection rules already failed, so it is `error`
 	// whatever the rest of it parses as: an invalid token, a user-defined

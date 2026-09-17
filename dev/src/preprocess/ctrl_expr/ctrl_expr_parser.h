@@ -1,24 +1,37 @@
 // The PA3 controlling-expression parser and evaluator.
 //
-// The grammar is the handout's `controlling-expression`, parsed by a
-// hand-written predictive parser.  Every left-recursive production becomes an
-// iterative loop, which fixes each operator's associativity without building a
-// tree: the parser evaluates as it parses, and the only state a sub-expression
-// produces is one value plus one signedness bit.
+// The grammar is the handout's `controlling-expression`, parsed by an
+// operator-precedence parser driven by one explicit stack.  The handout's own
+// design note names the technique - "collapse the calls to all the different
+// binary operator expressions into one call ... by keeping a precedence table
+// and making decisions about how to build the parse tree based upon it" - and
+// it is also what lets the stage accept any nesting the source can spell.  A
+// recursive-descent parser, this stage's first form, grows the C stack with the
+// expression's nesting, so the depth it accepts is a property of `ulimit -s`
+// rather than of the input and the failure is a SIGSEGV that loses the whole
+// run's output; the reference parses nesting from the heap and computes a value
+// at any depth.
 //
-// Evaluation is lazy in exactly the two places the language is: the right
-// operand of `&&`/`||` and the arm of `?:` the condition did not choose.  A
-// `live` flag follows those edges; a dead sub-expression is still parsed and
-// still typed - 5.16's result type comes from both arms even when one is not
-// evaluated - but its value is not computed and the course-defined value
-// errors (division by zero, an out-of-range shift) are not raised.  Every other
-// error, including a grammar mismatch and an unconsumed token, is independent
-// of the flag.
+// The parser evaluates as it reduces, so the only state a sub-expression
+// produces is one value plus one signedness bit - there is no tree and no
+// second pass over one.  Liveness travels with the operator stack instead: the
+// liveness of the operand region that follows an operator is fixed when the
+// operator is read, because the value it depends on is already on the value
+// stack.  `0 && ...` knows its right operand is dead at the `&&`, and `a ? b :
+// c` knows which arm is dead at the `?` and the `:`.  A dead sub-expression is
+// still parsed and still typed - 5.16's result type comes from both arms even
+// when one is not evaluated - but its value is not computed, so the handout's
+// course-defined value errors (division by zero, an out-of-range shift) are
+// raised only where the language evaluates.  Both stacks are heap vectors the
+// stage keeps across logical lines, so a line is parsed in O(tokens) time and
+// memory with no per-token allocation and no machine stack limit.
 
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "preprocess/ctrl_expr/ctrl_expr_token.h"
 
@@ -27,33 +40,40 @@ namespace cppgm
 namespace preprocess
 {
 
-// One controlling expression, evaluated into its output line.
+// One controlling expression, parsed and evaluated into its output line.  The
+// sink keeps one of these for the whole run, so the two stacks keep their
+// capacity across lines.
 class CtrlExpression
 {
 public:
-	CtrlExpression(const CtrlToken* tokens, std::size_t count)
-		: tokens_(tokens)
-		, count_(count)
+	CtrlExpression()
+		: tokens_(0)
+		, count_(0)
 		, at_(0)
-		, depth_(0)
+		, expect_operand_(true)
 	{}
 
 	// Appends the line's result to `out`, without a newline: the decimal value,
 	// with a `u` suffix when the promoted result type is unsigned, or `error`
-	// when the token sequence is not a valid controlling expression.
-	void Evaluate(std::string& out);
+	// when the token sequence is not a valid controlling expression - a grammar
+	// mismatch, an unconsumed token, or one of the handout's course-defined
+	// value errors reached during evaluation.
+	void Evaluate(const CtrlToken* tokens, std::size_t count, std::string& out);
 
 private:
 	// A sub-expression's value: always one of the two promoted types the
-	// handout fixes, held as its 64-bit two's complement image.
+	// handout fixes, held as its 64-bit two's complement image plus the bit that
+	// says which of the two it is.
 	struct Value
 	{
 		unsigned long long bits;
 		bool is_unsigned;
 	};
 
-	// The binary operators the token sequence can carry, and the precedence the
-	// handout's grammar gives each of them (a higher number binds tighter).
+	enum EUnOp { UN_PLUS, UN_MINUS, UN_COMPL, UN_LNOT };
+
+	// The binary operators in the order the grammar names their levels (a
+	// higher number binds tighter).  Every one of them is left associative.
 	enum EBinOp
 	{
 		BIN_LOR, BIN_LAND,
@@ -65,6 +85,15 @@ private:
 		BIN_MUL, BIN_DIV, BIN_MOD
 	};
 
+	// What the operator stack holds.  `kOpQuestion` is the `?` of a
+	// conditional, waiting for its `:`; `kOpPending` is the `:`-completed form,
+	// waiting for the arm it will take.  Both carry the conditional's
+	// precedence, which is why a binary operator is never reduced over one.
+	enum EOpKind : std::uint8_t { kOpPrefix, kOpBinary, kOpOpen, kOpQuestion, kOpPending };
+
+	// The entry in the table the precedence loop and the binary lookup share:
+	// the token that spells the operator, the operation, and how tightly it
+	// binds.
 	struct BinOpEntry
 	{
 		posttoken::ETokenType token;
@@ -72,73 +101,75 @@ private:
 		unsigned precedence;
 	};
 
-	// The one table the precedence loop is driven by, in the grammar's order.
 	static const BinOpEntry kBinaryOps[];
 
-	// A signed `+`, `-` or `*` whose mathematical value is not representable in
-	// `intmax_t`, reported rather than wrapped.  The builtins give each operator
-	// that definition directly, so this code never relies on signed overflow of
-	// its own.
-	static bool SignedOverflow(EBinOp op, long long left, long long right, long long& result);
-
-	// The parser is recursive descent, so the C stack grows with the
-	// expression's nesting - an unparenthesised prefix chain and each
-	// parenthesised or conditional level add frames.  The handout's own design
-	// note accepts that call stack, but nothing bounds it: without a limit the
-	// only bound is the process stack, so the same input would succeed or die
-	// on SIGSEGV according to `ulimit -s`.  Every production compiler bounds
-	// nesting too (clang's default maximum bracket depth is 256); an expression
-	// nested past this one is an invalid controlling expression, which is the
-	// line's `error`, rather than a crash.  The limit counts parser frames, so
-	// it allows more than half of it in nested parentheses.
-	static const std::size_t kMaxNesting = 8192;
-
-	// Counts parser frames for as long as the object lives.
-	class DepthGuard
+	// One operator stack entry.  `op` is an `EUnOp` for `kOpPrefix` and an
+	// `EBinOp` for `kOpBinary`; the other kinds carry no operation.  `live` is
+	// the liveness of the operation itself and `operand_live` that of the
+	// operand region that follows it - the two differ exactly where the
+	// language decides an operand's liveness from a value: `&&`, `||` and the
+	// two arms of `?:`.  Only a live operation computes its value; a dead one
+	// still produces its result type.
+	struct Op
 	{
-	public:
-		DepthGuard(std::size_t& depth, std::size_t limit)
-			: depth_(depth)
-			, within_(++depth <= limit)
-		{}
-
-		~DepthGuard() { --depth_; }
-
-		bool Within() const { return within_; }
-
-	private:
-		std::size_t& depth_;
-		bool within_;
+		unsigned precedence;
+		EOpKind kind;
+		std::uint8_t op;
+		bool live;
+		bool operand_live;
 	};
 
-	bool AtEnd() const { return at_ >= count_; }
-	const CtrlToken& Peek() const { return tokens_[at_]; }
-	void Consume() { ++at_; }
+	bool Parse();
+	bool Finish();
+	bool ReadToken();
+	bool ReadValue(unsigned long long bits, bool is_unsigned);
+	bool ReadDefined();
+	bool ReadSimple(posttoken::ETokenType type);
+	bool OpenParen();
+	bool CloseParen();
+	bool OpenQuestion();
+	bool CloseQuestion();
+	bool BeginBinary(EBinOp op, unsigned precedence);
+
+	bool Reducible() const;
+	bool ReduceOperators(unsigned precedence, bool inclusive);
+	bool ReduceAll();
+	bool ReduceTop();
+	bool ReducePrefix(const Op& op);
+	bool ReduceBinary(const Op& op);
+	bool ReduceConditional(const Op& op);
+
+	// The liveness of the operand region the parser is in: the top entry's
+	// `operand_live`, or true outside every operation.
+	bool CurrentLive() const
+	{
+		return ops_.empty() ? true : ops_.back().operand_live;
+	}
+
 	bool Expect(posttoken::ETokenType type);
 
-	// True for the keyword token types.  Keywords are `identifier_or_keyword`s
-	// in a controlling expression and so are operands, never operators.
 	static bool IsKeyword(posttoken::ETokenType type);
 	static bool IsIdentifierOrKeyword(const CtrlToken& token);
-	static bool LookupBinOp(posttoken::ETokenType type, BinOpEntry& entry);
+	static bool LookupBinOp(posttoken::ETokenType type, EBinOp& op, unsigned& precedence);
+	static bool LookupPrefixOperator(posttoken::ETokenType type, EUnOp& op);
 
-	bool ParseControllingExpression(bool live, Value& out);
-	// Every binary precedence level of the grammar in one loop: parse an
-	// operand no looser than `min_precedence`, then keep applying the
-	// operators that bind at least as tightly, leftward.  This is the collapse
-	// the handout's design note recommends, and it is what keeps a nested
-	// expression's stack cost proportional to its parenthesis depth rather
-	// than to the number of precedence levels crossed at each one.
-	bool ParseBinary(unsigned min_precedence, bool live, Value& out);
-	bool ParseUnary(bool live, Value& out);
-	bool ParsePrimary(bool live, Value& out);
-	bool ParseDefined(Value& out);
-	bool ApplyBinary(EBinOp op, bool live, const Value& lhs, const Value& rhs, Value& out);
+	static bool ResultIsUnsigned(EBinOp op, bool left_unsigned, bool right_unsigned);
+	static bool SignedOverflow(EBinOp op, long long left, long long right, long long& result);
+	static bool ApplyUnary(EUnOp op, unsigned long long operand, bool is_unsigned,
+	                       unsigned long long& result);
+	static bool ApplyBinary(EBinOp op, unsigned long long left, bool left_unsigned,
+	                        unsigned long long right, bool right_unsigned,
+	                        unsigned long long& result);
 
 	const CtrlToken* tokens_;
 	std::size_t count_;
 	std::size_t at_;
-	std::size_t depth_;
+	bool expect_operand_;
+
+	// The value of each complete sub-expression, in the order the reductions
+	// produce them, and the operators still waiting to be reduced.
+	std::vector<Value> values_;
+	std::vector<Op> ops_;
 };
 
 } // namespace preprocess
