@@ -2,6 +2,7 @@
 
 #include "support/not_implemented.h"
 #include "support/tool_help_text.h"
+#include "syntax/syntax_driver.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -382,7 +383,22 @@ int run_unimplemented_mode(const char * feature,
 int run_emit_ast_mode(const vector<string> & args)
 {
   parse_source_output_invocation(args, false);
-  return run_unimplemented_mode("--emit-ast", "PA5");
+
+  string outfile;
+  vector<string> inputs;
+  for(size_t i = 0; i < args.size(); ++i) {
+    if(args[i] == "-o") {
+      if(i + 1 >= args.size()) {
+        throw logic_error("missing output file after -o");
+      }
+      outfile = args[++i];
+      continue;
+    }
+    inputs.push_back(args[i]);
+  }
+
+  cppgm::syntax::EmitAst(inputs, outfile);
+  return EXIT_SUCCESS;
 }
 
 int run_emit_types_mode(const vector<string> & args)
