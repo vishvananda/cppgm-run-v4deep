@@ -194,24 +194,6 @@ bool IsCastKeywordKind(int kind)
 	}
 }
 
-bool IsPrefixUnaryOperatorKind(int kind)
-{
-	switch(kind)
-	{
-	case posttoken::OP_INC:
-	case posttoken::OP_DEC:
-	case posttoken::OP_STAR:
-	case posttoken::OP_AMP:
-	case posttoken::OP_PLUS:
-	case posttoken::OP_MINUS:
-	case posttoken::OP_LNOT:
-	case posttoken::OP_COMPL:
-		return true;
-	default:
-		return false;
-	}
-}
-
 int BinaryOperatorLevel(int kind)
 {
 	switch(kind)
@@ -522,12 +504,6 @@ bool Parser::IsTypeName(const string& name) const
 {
 	const int kind = NameKind(name);
 	return kind == kNameType || kind == kNameTemplate || kind == kNameNamespace;
-}
-
-bool Parser::IsTemplateName(const string& name) const
-{
-	const int kind = NameKind(name);
-	return kind == kNameType || kind == kNameTemplate;
 }
 
 bool Parser::IsKnownValue(const string& name) const

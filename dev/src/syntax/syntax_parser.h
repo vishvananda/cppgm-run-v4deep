@@ -94,7 +94,6 @@ private:
 	static int Hinted(const std::string& name);
 	int NameKind(const std::string& name) const;
 	bool IsTypeName(const std::string& name) const;
-	bool IsTemplateName(const std::string& name) const;
 	bool IsKnownValue(const std::string& name) const;
 
 	// --- translation unit -----------------------------------------------
@@ -134,7 +133,6 @@ private:
 	bool ClassBodyHasInlineMemberDefinition() const;
 	int ClassForwardDeclaration();
 	int ElaboratedTypeSpecifier();
-	int EnumDeclaration();
 	int EnumSpecifier();
 	int BaseClause();
 	int ClassMember();
@@ -153,10 +151,8 @@ private:
 
 	// --- declarators ----------------------------------------------------
 	int Declarator();
-	int DirectDeclarator(int parent);
-	int DeclaratorId();
 	int DeclaratorSuffix(int parent);
-	bool StartsDeclaratorSuffix(std::size_t offset = 0) const;
+	int DeclaratorId();
 	int ParameterClause();
 	void ParameterDeclarationList(int parent);
 	int ParameterDeclaration();
@@ -264,7 +260,6 @@ bool IsMemberFunctionSpecifierKind(int kind);
 bool IsOperatorTokenKind(int kind);
 bool IsAssignmentOperatorKind(int kind);
 bool IsCastKeywordKind(int kind);
-bool IsPrefixUnaryOperatorKind(int kind);
 int BinaryOperatorLevel(int kind);
 
 }  // namespace syntax
