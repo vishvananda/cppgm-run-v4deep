@@ -662,10 +662,9 @@ bool Parser::CanStartDeclSpecifier() const
 	if(kind == kIdentifierToken)
 	{
 		// A name begins a decl-specifier-seq wherever only a declaration can
-		// appear; a qualified name has no other reading; inside a block an
-		// unqualified one is decided by its category.
-		return declaration_only_ > 0 || IsTypeName(Spelling()) ||
-		       At(posttoken::OP_COLON2, 1);
+		// appear; inside a block the category of the name - of a qualified
+		// name's last component - decides.
+		return declaration_only_ > 0 || AtQualifiedTypeStart(0);
 	}
 	return false;
 }
@@ -1069,14 +1068,14 @@ int Parser::NamespaceDefinition()
 		Bind(name, kNameNamespace);
 	}
 	Expect(posttoken::OP_LBRACE, "`{`");
-	PushScope();
+	// A namespace's members are visible to the enclosing scope's later
+	// declarations, so they bind there rather than in a scope of their own.
 	++declaration_only_;
 	while(!At(posttoken::OP_RBRACE) && !AtEof())
 	{
 		Add(node, Declaration());
 	}
 	--declaration_only_;
-	PopScope();
 	Expect(posttoken::OP_RBRACE, "`}`");
 	return node;
 }
