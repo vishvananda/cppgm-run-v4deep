@@ -560,9 +560,9 @@ int Parser::UnaryExpression()
 		// expression reading: `sizeof(S())` is a functional cast, not a
 		// function type.
 		const bool name_then_paren =
-		    AtTypeSpecifierStart(1) && KindAt(1) == kIdentifierToken &&
+		    AtQualifiedTypeStart(1) && KindAt(1) == kIdentifierToken &&
 		    At(posttoken::OP_LPAREN, 2);
-		if(At(posttoken::OP_LPAREN) && AtTypeSpecifierStart(1) && !name_then_paren)
+		if(At(posttoken::OP_LPAREN) && AtQualifiedTypeStart(1) && !name_then_paren)
 		{
 			const Mark mark = Take();
 			Advance();
@@ -691,22 +691,10 @@ int Parser::NewExpression()
 	}
 	if(At(posttoken::OP_LPAREN))
 	{
+		const size_t start = Position();
 		const int placement = Tag("placement");
-		Advance();
-		++nested_delim_;
-		if(!At(posttoken::OP_RPAREN))
-		{
-			for(;;)
-			{
-				Add(placement, AssignmentExpression());
-				if(!Accept(posttoken::OP_COMMA))
-				{
-					break;
-				}
-			}
-		}
-		Expect(posttoken::OP_RPAREN, "`)`");
-		--nested_delim_;
+		Add(placement, ParenArgumentList());
+		arena_.SetLabel(placement, JoinedText(start, EndPosition()));
 		Add(node, placement);
 	}
 	// A parenthesized type-id after `new` is a pointer-to-array new; the

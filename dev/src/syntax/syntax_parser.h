@@ -175,6 +175,7 @@ private:
 	std::string NestedNameSpecifier(bool& present);
 	int DecltypeSpecifier();
 	bool AtTypeSpecifierStart(std::size_t offset = 0) const;
+	bool AtQualifiedTypeStart(std::size_t offset) const;
 	bool AngleGuardSuspended() const;
 	void NoteLogicalInAngle();
 
@@ -229,6 +230,7 @@ private:
 	// The name the declarator just parsed declared, for the declaration that
 	// has to bind it.
 	std::string declarator_name_;
+	std::string last_type_name_;
 	bool declarator_is_function_;
 	// Nonzero where only a declaration can appear.
 	int declaration_only_;

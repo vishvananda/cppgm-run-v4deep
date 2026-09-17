@@ -777,6 +777,12 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 				                  Spelling() + "`)");
 			}
 			const size_t last = EndPosition();
+			if(At(posttoken::OP_LPAREN) && !IsTypeName(last_type_name_))
+			{
+				// `N::f();` is a call: a qualified name whose last component is
+				// not a type cannot be the declaration's type.
+				throw SyntaxError("not a type name");
+			}
 			if(last == start + 1)
 			{
 				Add(seq, Terminal("decl-specifier", tokens_[start]));
@@ -1884,6 +1890,7 @@ int Parser::Declarator()
 			Advance();
 		}
 	}
+	bool has_content = !arena_.Node(node).children.empty();
 	if(At(posttoken::OP_LPAREN))
 	{
 		Advance();
@@ -1891,6 +1898,7 @@ int Parser::Declarator()
 		Add(nested, Declarator());
 		Expect(posttoken::OP_RPAREN, "`)`");
 		Add(node, nested);
+		has_content = true;
 	}
 	else
 	{
@@ -1900,13 +1908,26 @@ int Parser::Declarator()
 		{
 			Add(node, Named("parameter-pack", "..."));
 			Advance();
+			has_content = true;
 		}
-		Add(node, DeclaratorId());
+		if(At(kIdentifierToken) || At(posttoken::OP_COLON2) ||
+		   At(posttoken::KW_OPERATOR) || At(posttoken::OP_COMPL))
+		{
+			Add(node, DeclaratorId());
+			has_content = true;
+		}
 		if(At(posttoken::OP_DOTS))
 		{
 			Add(node, Named("parameter-pack", "..."));
 			Advance();
+			has_content = true;
 		}
+	}
+	if(!has_content)
+	{
+		// An empty declarator is not one; the caller's abstract reading is.
+		arena_.DropTo(static_cast<size_t>(node));
+		throw SyntaxError("expected a declarator");
 	}
 	// The name the suffixes see is the one this declarator declared; a
 	// parameter clause inside them declares names of its own.
@@ -2412,6 +2433,45 @@ int Parser::TypeSpecifierSeq()
 	return node;
 }
 
+// True when the tokens at `offset` begin a type-id whose final name is a type:
+// `N::probe` is not one when `probe` is a value, which is what tells
+// `sizeof(N::probe(x))` from `sizeof(N::T)`.
+bool Parser::AtQualifiedTypeStart(size_t offset) const
+{
+	size_t cursor = offset;
+	for(;;)
+	{
+		if(KindAt(cursor) != kIdentifierToken)
+		{
+			return AtTypeSpecifierStart(offset);
+		}
+		const bool is_type = IsTypeName(Spelling(cursor));
+		++cursor;
+		if(At(posttoken::OP_LT, cursor))
+		{
+			int depth = 0;
+			do
+			{
+				if(At(posttoken::OP_LT, cursor))
+				{
+					++depth;
+				}
+				else if(At(posttoken::OP_GT, cursor) || At(posttoken::OP_RSHIFT, cursor))
+				{
+					--depth;
+				}
+				++cursor;
+			} while(depth > 0 && KindAt(cursor) != kEofToken);
+		}
+		if(At(posttoken::OP_COLON2, cursor))
+		{
+			++cursor;
+			continue;
+		}
+		return is_type;
+	}
+}
+
 bool Parser::AtTypeSpecifierStart(size_t offset) const
 {
 	const int kind = KindAt(offset);
@@ -2528,6 +2588,7 @@ int Parser::QualifiedTypeName(bool& seen, bool require_type)
 		return kNoSyntaxNode;
 	}
 	seen = true;
+	last_type_name_ = Spelling();
 	Advance();
 	if(At(posttoken::OP_LT))
 	{
