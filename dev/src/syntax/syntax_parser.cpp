@@ -700,13 +700,14 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 			}
 			const size_t start = Position();
 			bool seen = false;
-			QualifiedTypeName(seen, true);
+			QualifiedTypeName(seen, declaration_only_ == 0);
 			if(!seen || At(posttoken::OP_COLON2))
 			{
 				// The `::` after the name belongs to the name that follows it,
 				// so this is not a decl-specifier-seq at all: `C::operator int`
 				// starts a special member definition and `N::f();` a call.
-				throw SyntaxError("not a type name");
+				throw SyntaxError("not a type name at token " + to_string(pos_) + " (`" +
+				                  Spelling() + "`)");
 			}
 			const size_t last = EndPosition();
 			if(last == start + 1)
@@ -2227,17 +2228,36 @@ string Parser::NestedNameSpecifier(bool& present)
 {
 	present = false;
 	string component;
+	// `nested-name-specifier-root`, then any number of suffixes.  A component
+	// may be a plain name or a simple-template-id, so `Box<T>::` and `N::` are
+	// both roots and both suffixes.
 	if(At(posttoken::OP_COLON2))
 	{
 		present = true;
 		Advance();
 	}
-	else if(At(kIdentifierToken) && At(posttoken::OP_COLON2, 1))
+	else if(At(kIdentifierToken))
 	{
-		present = true;
-		component = Spelling();
+		const Mark mark = Take();
+		const string candidate = Spelling();
 		Advance();
-		Advance();
+		if(At(posttoken::OP_LT) && TryTemplateIdTail() && At(posttoken::OP_COLON2))
+		{
+			present = true;
+			component = candidate;
+			Advance();
+		}
+		else if(At(posttoken::OP_COLON2))
+		{
+			present = true;
+			component = candidate;
+			Advance();
+		}
+		else
+		{
+			Rollback(mark);
+			return component;
+		}
 	}
 	else if(At(posttoken::KW_DECLTYPE) && At(posttoken::OP_COLON2, 1))
 	{
