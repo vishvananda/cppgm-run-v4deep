@@ -777,12 +777,6 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 				                  Spelling() + "`)");
 			}
 			const size_t last = EndPosition();
-			if(At(posttoken::OP_LPAREN) && !IsTypeName(last_type_name_))
-			{
-				// `N::f();` is a call: a qualified name whose last component is
-				// not a type cannot be the declaration's type.
-				throw SyntaxError("not a type name");
-			}
 			if(last == start + 1)
 			{
 				Add(seq, Terminal("decl-specifier", tokens_[start]));
