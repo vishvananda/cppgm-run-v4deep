@@ -1866,6 +1866,9 @@ int Parser::Declarator()
 			Advance();
 		}
 	}
+	// The name the suffixes see is the one this declarator declared; a
+	// parameter clause inside them declares names of its own.
+	const string own_name = declarator_name_;
 	for(;;)
 	{
 		// A hosted attribute after the declarator-id carries no tree.
@@ -1906,6 +1909,7 @@ int Parser::Declarator()
 		}
 		break;
 	}
+	declarator_name_ = own_name;
 	return node;
 }
 
@@ -2223,11 +2227,32 @@ int Parser::AbstractDeclaratorBody(bool in_parameter)
 		}
 		break;
 	}
-	if(in_parameter && any_ptr && !group)
+	// A pointer operator anywhere in the abstract declarator makes it print as
+	// a `declarator` in a parameter; a bare suffix form stays an
+	// `abstract-declarator`.
+	if(in_parameter && PtrOperatorsIn(node) > 0)
 	{
 		arena_.PutTag(node, "declarator");
 	}
 	return node;
+}
+
+// Counts the `ptr-operator` nodes in a subtree, which is what decides how an
+// abstract declarator in a parameter prints.
+int Parser::PtrOperatorsIn(int node) const
+{
+	int count = 0;
+	const vector<int>& children = arena_.Node(node).children;
+	for(size_t index = 0; index < children.size(); ++index)
+	{
+		const int child = children[index];
+		if(arena_.Text(arena_.Node(child).tag) == "ptr-operator")
+		{
+			++count;
+		}
+		count += PtrOperatorsIn(child);
+	}
+	return count;
 }
 
 // ---------------------------------------------------------------------------

@@ -179,6 +179,7 @@ private:
 	int AbstractDeclaratorInParameter();
 	int ParameterLikeDeclarator();
 	int AbstractDeclaratorBody(bool in_parameter);
+	int PtrOperatorsIn(int node) const;
 	int PtrOperator();
 
 	// --- types ----------------------------------------------------------
