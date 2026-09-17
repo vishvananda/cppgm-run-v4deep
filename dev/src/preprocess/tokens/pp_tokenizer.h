@@ -20,7 +20,17 @@ namespace preprocess
 //
 // Header-names are context sensitive ([lex.header]).  The recogniser tracks
 // whether the most recent significant tokens were (start of line or new-line)
-// then `#` then `include`, ignoring whitespace sequences and comments.
+// then `#` then an include directive word (`include`, or `include_next`, the GNU
+// extension the library headers are written in terms of), ignoring whitespace
+// sequences and comments.
+//
+// A literal-operator-id is `operator "" identifier` ([over.literal]).  Read
+// with the longest-match rule, `operator""s` would be two tokens - `operator`
+// and the user-defined-string-literal `""s` - and the parser would never see
+// the empty string literal the production names.  After an `operator` token the
+// recogniser therefore splits `""suffix` into the string-literal and the
+// suffix, which is what the reference frontend does and what a translation unit
+// such as libstdc++'s <bits/basic_string.h> needs.
 class PPTokenizer
 {
 public:
@@ -43,6 +53,7 @@ private:
 	int CodeAt(std::size_t ahead) const;
 	std::size_t MatchOperator(std::size_t ahead) const;
 	bool MatchesOperator(std::size_t ahead, const char* spelling) const;
+	bool HasHexadecimalPrefix() const;
 
 	void BeginToken();
 	void Consume(std::size_t count);
@@ -72,6 +83,7 @@ private:
 	bool line_start_;
 	bool after_hash_;
 	bool after_include_;
+	bool after_operator_;
 };
 
 } // namespace preprocess

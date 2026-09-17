@@ -10,6 +10,12 @@ struct IPPTokenStream
 	// Location-aware consumers may override this hook. It is called before
 	// each spelling or new-line event and reports the physical source line of
 	// that event; legacy PA1-PA4 consumers intentionally need no location state.
+	//
+	// A consumer that reads the location overrides this to return true. The
+	// tokenizer skips the location lookup, and the source skips building its
+	// line index, while no consumer wants one: a text-output tool must not pay
+	// for telemetry it discards.
+	virtual bool wants_source_location() const { return false; }
 	virtual void set_source_line(std::size_t line) { (void)line; }
 	virtual void set_source_location(std::size_t line, std::size_t column)
 		{ set_source_line(line); (void)column; }

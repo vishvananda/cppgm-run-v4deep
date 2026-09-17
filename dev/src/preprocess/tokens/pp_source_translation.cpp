@@ -13,8 +13,39 @@ namespace
 {
 
 const int kLineFeed = 0x0A;
-const int kByteOrderMark = 0xFEFF;
 const int kMaxCodePoint = 0x10FFFF;
+
+// Windows-1252 for the byte range that cannot begin a UTF-8 sequence.  The
+// course defines the source character set as UTF-8, but the set of physical
+// source file characters accepted is implementation-defined (2.2/1.1), and the
+// reference frontend maps a stray byte in 0x80-0xBF through this table instead
+// of rejecting it.  Slots Windows-1252 leaves undefined map to themselves, and
+// 0xA0-0xBF are the same in Windows-1252 as in ISO 8859-1.  See
+// student.tests/pptoken_byte_differential.pl for the differential that pins it.
+const int kStrayByteCodePoints[0x40] =
+{
+	0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+	0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+	0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+	0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+	0x00A0, 0x00A1, 0x00A2, 0x00A3, 0x00A4, 0x00A5, 0x00A6, 0x00A7,
+	0x00A8, 0x00A9, 0x00AA, 0x00AB, 0x00AC, 0x00AD, 0x00AE, 0x00AF,
+	0x00B0, 0x00B1, 0x00B2, 0x00B3, 0x00B4, 0x00B5, 0x00B6, 0x00B7,
+	0x00B8, 0x00B9, 0x00BA, 0x00BB, 0x00BC, 0x00BD, 0x00BE, 0x00BF
+};
+
+// A byte in 0x80-0xBF can never begin a UTF-8 sequence, so it is read as a
+// Windows-1252 code point instead of being rejected.  This is the only path
+// where one physical byte yields one code point without a UTF-8 sequence.
+bool IsStrayByte(unsigned char lead)
+{
+	return lead >= 0x80 && lead <= 0xBF;
+}
+
+int StrayByteCodePoint(unsigned char lead)
+{
+	return kStrayByteCodePoints[lead - 0x80];
+}
 
 std::size_t SequenceLength(unsigned char lead)
 {
@@ -122,11 +153,14 @@ TranslatedSource::TranslatedSource(std::string bytes)
 	// 2.2/1.2: a source file that does not end in a new-line has one appended.
 	if (!buffer_.empty() && buffer_[buffer_.size() - 1] != '\n')
 		buffer_.push_back('\n');
-	BuildLineIndex();
+	// The line index is built on the first LocationOf call, so a translation
+	// unit whose consumer never asks for a position never pays for one.
 }
 
 void TranslatedSource::BuildLineIndex()
 {
+	if (!line_starts_.empty())
+		return;
 	line_starts_.push_back(0);
 	for (std::size_t index = 0; index < buffer_.size(); ++index)
 	{
@@ -141,6 +175,12 @@ bool TranslatedSource::DecodeAt(std::size_t byte_offset, int& code_point,
 	if (byte_offset >= buffer_.size())
 		return false;
 	unsigned char lead = static_cast<unsigned char>(buffer_[byte_offset]);
+	if (IsStrayByte(lead))
+	{
+		code_point = StrayByteCodePoint(lead);
+		next = byte_offset + 1;
+		return true;
+	}
 	std::size_t length = SequenceLength(lead);
 	if (byte_offset + length > buffer_.size())
 		throw SourceError("truncated UTF-8 character");
@@ -336,11 +376,10 @@ void TranslatedSource::ResumeAt(std::size_t byte_offset)
 
 SourceLocation TranslatedSource::LocationOf(std::size_t byte_offset)
 {
+	BuildLineIndex();
 	SourceLocation location;
 	location.line = 1;
 	location.column = 1;
-	if (line_starts_.empty())
-		return location;
 	if (byte_offset >= buffer_.size())
 		byte_offset = buffer_.size() == 0 ? 0 : buffer_.size() - 1;
 

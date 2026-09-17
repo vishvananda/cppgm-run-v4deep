@@ -7,7 +7,8 @@
 //
 // The pipeline is a cursor rather than a materialized stream: the tokenizer
 // pulls translated code points as it needs them, so a translation unit costs
-// its source buffer, a line index and a bounded lookahead window.  Raw string
+// its source buffer and a bounded lookahead window, plus a line index that is
+// built the first time somebody asks for a source position.  Raw string
 // literals read the buffer directly, because [lex.pptoken]/3 reverts the phase
 // 1 and 2 rewrites between their opening and closing quotes.
 
@@ -94,7 +95,9 @@ public:
 	void ResumeAt(std::size_t byte_offset);
 
 	// Physical position of a byte offset.  Calls arrive in non-decreasing byte
-	// order, so the line is found by walking the index forward.
+	// order, so the line is found by walking the index forward.  The line index
+	// is built on the first call, so a translation unit whose consumer wants no
+	// position never allocates one.
 	SourceLocation LocationOf(std::size_t byte_offset);
 
 private:

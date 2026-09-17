@@ -54,6 +54,7 @@ my @atoms = (
 	'??=', '????=', '??/', '?', '??', '???',
 	"\xC3\xA9", "\xCF\x80", "\xF0\x9F\x98\x80", "\xEF\xBB\xBF",
 	"\377", "\xC0\x80", "\xE2\x82",
+	"\x80", "\x85", "\x91", "\x9F", "\xA0", "\xAD", "\xBF", "\x81",
 	'??=include', '??=/*c*/', '\\' . "\n",
 );
 
@@ -72,14 +73,15 @@ sub make_input
 
 sub run_tool
 {
-	my ($tool, $input) = @_;
+	my ($tool, $input, $args) = @_;
 	my $in = "/tmp/pptoken_differential.in.$$";
 	my $out = "/tmp/pptoken_differential.out.$$";
 	open(my $fh, '>', $in) or die "cannot write $in: $!";
 	binmode($fh);
 	print $fh $input;
 	close($fh);
-	my $status = system("$tool < $in > $out 2>/dev/null");
+	$args = '' if !defined $args;
+	my $status = system("$tool $args < $in > $out 2>/dev/null");
 	my $exit = $status >> 8;
 	open(my $rf, '<', $out) or die "cannot read $out: $!";
 	local $/;
@@ -89,6 +91,29 @@ sub run_tool
 	$data = '' if !defined($data);
 	$data =~ s/\s+$//;
 	return ($exit, $data);
+}
+
+# The tool's command-line surface: it takes no options, so the harness worker
+# flag must be inert.  The skeleton answers `--batch-stdin` with a per-line
+# "not implemented" record until the tool is written; an implemented tool that
+# keeps that stub silently reports failure for every request, so pin the flag
+# here against the reference before the fuzz starts.
+my $cli_failures = 0;
+for my $args ('', '--batch-stdin')
+{
+	my ($mine_exit, $mine_out) = run_tool($mine, "int a;\n", $args);
+	my ($ref_exit, $ref_out) = run_tool($reference, "int a;\n", $args);
+	if ($mine_exit != $ref_exit || $mine_out ne $ref_out)
+	{
+		++$cli_failures;
+		print "CLI MISMATCH with args '$args': mine exit=$mine_exit ref exit=$ref_exit\n";
+		print "  mine:\n$mine_out\n  ref:\n$ref_out\n";
+	}
+}
+if ($cli_failures != 0)
+{
+	print "command-line surface check failed\n";
+	exit(1);
 }
 
 # Boundaries that the fixture suite does not pin, each one a place where two
@@ -106,6 +131,32 @@ my @curated = (
 	"/*c*/\n", "/*\n*/a\n", "//x", "a", "", "\n", "\xff", "\xc0\x80",
 	"s<::t\n", "x<:3:>y\n", "\"a\"b\n", "\"a\"_w\n", "'a'_w\n",
 	"u8'x'\n", "u8\"x\"\n", "u8R\"(x)\"\n", "LR\"(x)\"\n", "uR\"(x)\"\n",
+	# A byte in 0x80-0xBF cannot begin a UTF-8 sequence.  The reference reads it
+	# as one Windows-1252 code point rather than rejecting it; these are the
+	# reduced reproducers for that rule (0x80 -> U+20AC, 0x82 -> U+201A,
+	# 0xA0 -> U+00A0) and for the bytes around it, which stay errors.
+	"a\x80b\n", "\x80\n", "\x82\n", "\xA0\n", "\xBF\n", "\x81\n",
+	"/*\x80*/\n", "\"\x80\"\n", "R\"(\x80)\"\n", "#include <\x80>\n",
+	"R\"\x80(a)\x80\"\n", "\xA0\xBF\x80\x81\n", "a\x80\xA0b\n",
+	"\xC0\x80\n", "\xC1\x81\n", "\xF5\x80\x80\x80\n", "\xF8\n", "\xFF\n",
+	# `#include_next` is the GNU extension the library headers are written in
+	# terms of, and it takes a header-name exactly like `#include` does.
+	"#include_next <a>\n", "#include_next \"a\"\n", "%:include_next <c>\n",
+	"#include_next <>\n", "#include_next\n<a>\n", "#including <a>\n",
+	"#includeX <a>\n", "#includefoo <a>\n", "x #include_next <a>\n",
+	"#if 1\n#include_next <a>\n#endif\n",
+	# A literal-operator-id is `operator "" identifier`, so after `operator` the
+	# empty string literal and its suffix must arrive as separate tokens.
+	"operator\"\"s(int);\n", "operator \"\"s\n", "operator\"\"_x\n",
+	"operator\"\"not\n", "operator\"a\"s\n", "operator L\"\"s\n",
+	"operator''s\n", "(operator\"\"s)\n", "not\"\"s\n", "operator\"\"8x\n",
+	"operator\"\"\n", "operator\n\n\"\"s\n",
+	# A binary exponent sign belongs to a pp-number only when it began with the
+	# hexadecimal prefix; a decimal exponent sign belongs to every pp-number.
+	"0x1P+1\n", "0x1.5bf0a8b145769P+1\n", "0x1.5bf0a8b145769p-1\n",
+	"0xP+P\n", "0x1uP+1\n", "0x1P+\n", "0x1P++1\n", "0xx1P+1\n",
+	"1P+3\n", "1p+3\n", "10x1P+1\n", "00x1P+1\n", ".0x1P+1\n",
+	"0x1P+1P+1\n", "0x1E-1\n", "0e+1\n",
 );
 
 srand($seed);
@@ -116,14 +167,19 @@ for my $iteration (1 .. scalar(@inputs))
 	my $input = $inputs[$iteration - 1];
 	my ($mine_exit, $mine_out) = run_tool($mine, $input);
 	my ($ref_exit, $ref_out) = run_tool($reference, $input);
-	# Failing-case stdout is informational; only the status must agree.
-	next if $mine_exit != $ref_exit;
-	next if $ref_exit != 0;
-	next if $mine_out eq $ref_out;
+	# The exit status is an oracle for every input: a disagreement is a
+	# divergence whether or not the input is well-formed.  Only the stdout of a
+	# rejected input is informational, so that case compares nothing further.
+	if ($mine_exit == $ref_exit && $ref_exit != 0)
+	{
+		next;
+	}
+	next if $mine_exit == $ref_exit && $mine_out eq $ref_out;
 
 	++$mismatches;
 	print "MISMATCH on iteration $iteration\n";
 	print "input: ", unpack('H*', $input), "\n";
+	print "  exit status: mine=$mine_exit ref=$ref_exit\n" if $mine_exit != $ref_exit;
 	print "  mine:\n", $mine_out, "\n";
 	print "  ref:\n", $ref_out, "\n";
 	last if $mismatches >= 10;

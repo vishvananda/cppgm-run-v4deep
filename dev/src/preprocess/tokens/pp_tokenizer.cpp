@@ -141,6 +141,17 @@ const char* const kIdentifierLikeOperators[] =
 	"not_eq", "or", "or_eq", "xor", "xor_eq"
 };
 
+// The directive words that take a header-name.  `include_next` is the GNU
+// extension the C++ library headers are written in terms of; the reference
+// frontend recognises it exactly like `include`, and nothing else - not
+// `including`, not `includeX`, not `import`.  Everything else about the
+// directive context (start of line, `#` or `%:`, intervening whitespace and
+// comments) is shared.
+bool IsIncludeDirectiveWord(const std::string& spelling)
+{
+	return spelling == "include" || spelling == "include_next";
+}
+
 bool IsIdentifierLikeOperator(const std::string& spelling)
 {
 	for (std::size_t index = 0;
@@ -162,6 +173,7 @@ PPTokenizer::PPTokenizer(TranslatedSource& source, IPPTokenStream& output)
 	, line_start_(true)
 	, after_hash_(false)
 	, after_include_(false)
+	, after_operator_(false)
 {}
 
 int PPTokenizer::CodeAt(std::size_t ahead) const
@@ -289,8 +301,13 @@ void PPTokenizer::Consume(std::size_t count)
 	source_.Advance(count);
 }
 
+// Reports the physical position of the token that is about to be emitted.  A
+// consumer that never reads a location is not charged for one: the lookup, and
+// the source line index behind it, only exist while somebody wants them.
 void PPTokenizer::ReportLocation()
 {
+	if (!output_.wants_source_location())
+		return;
 	SourceLocation location = source_.LocationOf(token_byte_offset_);
 	output_.set_source_location(location.line, location.column);
 }
@@ -302,6 +319,9 @@ void PPTokenizer::NoteEmitted(TokenRole role)
 	case role_whitespace:
 		return;
 	case role_new_line:
+		// A new-line ends a preprocessing directive but not the literal-operator
+		// context: `operator` followed by a new-line and then `""s` still names
+		// a literal-operator-id, and the reference splits it there too.
 		line_start_ = true;
 		after_hash_ = false;
 		after_include_ = false;
@@ -310,16 +330,19 @@ void PPTokenizer::NoteEmitted(TokenRole role)
 		after_hash_ = line_start_;
 		after_include_ = false;
 		line_start_ = false;
+		after_operator_ = false;
 		return;
 	case role_include:
 		after_include_ = after_hash_;
 		after_hash_ = false;
 		line_start_ = false;
+		after_operator_ = false;
 		return;
 	default:
 		line_start_ = false;
 		after_hash_ = false;
 		after_include_ = false;
+		after_operator_ = false;
 		return;
 	}
 }
@@ -484,6 +507,16 @@ void PPTokenizer::ScanHeaderName()
 	NoteEmitted(role_other);
 }
 
+// True while the token being scanned began with the hexadecimal prefix.  A
+// binary exponent can only appear in a hexadecimal literal, so `p`/`P` takes an
+// exponent sign only there; the sign of a decimal exponent (`e`/`E`) is part of
+// the pp-number grammar in every pp-number.
+bool PPTokenizer::HasHexadecimalPrefix() const
+{
+	return spelling_.size() >= 2 && spelling_[0] == '0' &&
+		(spelling_[1] == 'x' || spelling_[1] == 'X');
+}
+
 void PPTokenizer::ScanPPNumber()
 {
 	Consume(1);
@@ -498,7 +531,9 @@ void PPTokenizer::ScanPPNumber()
 		}
 		std::size_t length = spelling_.size();
 		char previous = length == 0 ? '\0' : spelling_[length - 1];
-		if ((code_point == '+' || code_point == '-') && (previous == 'e' || previous == 'E'))
+		bool exponent = previous == 'e' || previous == 'E' ||
+			(HasHexadecimalPrefix() && (previous == 'p' || previous == 'P'));
+		if ((code_point == '+' || code_point == '-') && exponent)
 		{
 			Consume(1);
 			continue;
@@ -559,9 +594,11 @@ void PPTokenizer::ScanIdentifier()
 		NoteEmitted(role_other);
 		return;
 	}
-	bool is_include = spelling_ == "include";
+	bool is_include = IsIncludeDirectiveWord(spelling_);
+	bool is_operator = spelling_ == "operator";
 	output_.emit_identifier(spelling_);
 	NoteEmitted(is_include ? role_include : role_other);
+	after_operator_ = is_operator;
 }
 
 bool PPTokenizer::HasHexQuad(std::size_t ahead, std::size_t count) const
@@ -681,6 +718,18 @@ void PPTokenizer::ScanStringLiteral(std::size_t prefix_length)
 	}
 	if (IsIdentifierStart(CodeAt(0)))
 	{
+		// A literal-operator-id is `operator "" identifier`: after an `operator`
+		// token an empty, prefix-less string literal keeps its suffix as a
+		// separate token, so the parser can see the empty string literal the
+		// production names.  A non-empty body, an encoding prefix or a raw
+		// string stays whole.
+		if (after_operator_ && prefix_length == 0 && spelling_ == "\"\"")
+		{
+			ReportLocation();
+			output_.emit_string_literal(spelling_);
+			NoteEmitted(role_other);
+			return;
+		}
 		Consume(1);
 		while (IsIdentifierBody(CodeAt(0)))
 			Consume(1);
@@ -742,7 +791,19 @@ void PPTokenizer::ScanRawStringLiteral(std::size_t quote_offset)
 		cursor = next;
 	}
 
-	spelling_ += buffer.substr(quote_byte + 1, cursor - (quote_byte + 1));
+	// The body between the quotes is read from the untranslated buffer, but it
+	// is still decoded: a byte in 0x80-0xBF that cannot begin a UTF-8 sequence
+	// is reported as its source character, exactly as everywhere else, so the
+	// spelling is the code point sequence rather than the raw bytes.
+	for (std::size_t at = quote_byte + 1; at < cursor;)
+	{
+		int body_code_point = 0;
+		std::size_t body_next = 0;
+		if (!source_.DecodeAt(at, body_code_point, body_next) || body_next > cursor)
+			break;
+		AppendCodePointUtf8(body_code_point, spelling_);
+		at = body_next;
+	}
 	source_.ResumeAt(cursor);
 
 	if (IsIdentifierStart(CodeAt(0)))

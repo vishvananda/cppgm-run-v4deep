@@ -1,5 +1,4 @@
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -35,33 +34,19 @@ string ReadStandardInput()
 	return input;
 }
 
-bool HasBatchStdinArg(int argc, char** argv)
-{
-	for (int i = 1; i < argc; i++)
-	{
-		if (string(argv[i]) == "--batch-stdin")
-			return true;
-	}
-	return false;
-}
-
-int RunNotImplementedBatchMode()
-{
-	string line;
-	while (getline(cin, line))
-	{
-		(void)line;
-		cout << "EXIT_NOT_IMPLEMENTED" << endl;
-	}
-	return EXIT_SUCCESS;
-}
-
 int main(int argc, char** argv)
 {
+	// The tool has no options: the source is standard input and the token
+	// stream is standard output.  `--batch-stdin` is the harness's worker flag
+	// and is inert here, exactly as it is for the reference wrapper: the test
+	// runner intercepts it before this function when it is driving a worker.
 	try
 	{
-		if (HasBatchStdinArg(argc, argv))
-			return RunNotImplementedBatchMode();
+		// The token stream is this tool's whole output, and it is the dominant
+		// cost of a translation unit.  Letting the C++ streams use their own
+		// buffers instead of forwarding every insertion to stdio removes the
+		// stdio_sync_filebuf indirection without changing a byte of output.
+		ios_base::sync_with_stdio(false);
 
 		string input = ReadStandardInput();
 
