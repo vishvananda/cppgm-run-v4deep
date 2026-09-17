@@ -1,6 +1,8 @@
 #include "preprocess/tokens/pp_source_translation.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <utility>
 
 namespace cppgm
 {
@@ -13,11 +15,6 @@ namespace
 const int kLineFeed = 0x0A;
 const int kByteOrderMark = 0xFEFF;
 const int kMaxCodePoint = 0x10FFFF;
-
-bool IsContinuationByte(unsigned char byte)
-{
-	return (byte & 0xC0) == 0x80;
-}
 
 std::size_t SequenceLength(unsigned char lead)
 {
@@ -39,44 +36,17 @@ int MinimumValueForLength(std::size_t length)
 	return length == 3 ? 0x800 : 0x10000;
 }
 
-void DecodeSourceBytes(const std::string& bytes, std::vector<int>& physical)
+bool HexDigitValue(int code_point, int& value)
 {
-	std::size_t index = 0;
-	while (index < bytes.size())
-	{
-		unsigned char lead = static_cast<unsigned char>(bytes[index]);
-		std::size_t length = SequenceLength(lead);
-		if (index + length > bytes.size())
-			throw SourceError("truncated UTF-8 character");
-
-		int value = length == 1 ? lead : (lead & (0xFF >> (length + 1)));
-		for (std::size_t offset = 1; offset < length; ++offset)
-		{
-			unsigned char continuation = static_cast<unsigned char>(bytes[index + offset]);
-			if (!IsContinuationByte(continuation))
-				throw SourceError("invalid UTF-8 continuation byte");
-			value = (value << 6) | (continuation & 0x3F);
-		}
-
-		if (value < MinimumValueForLength(length))
-			throw SourceError("invalid UTF-8 scalar value");
-		if (value > kMaxCodePoint || (value >= 0xD800 && value <= 0xDFFF))
-			throw SourceError("invalid UTF-8 scalar value");
-
-		physical.push_back(value);
-		index += length;
-	}
-}
-
-// Removes a byte order mark at the start of a translation unit and appends the
-// line feed that 2.2/1.2 requires the buffer to end with.  An empty buffer
-// stays empty: there is no final source line to terminate.
-void NormalizeBuffer(std::vector<int>& physical)
-{
-	if (!physical.empty() && physical[0] == kByteOrderMark)
-		physical.erase(physical.begin());
-	if (!physical.empty() && physical.back() != kLineFeed)
-		physical.push_back(kLineFeed);
+	if (code_point >= '0' && code_point <= '9')
+		value = code_point - '0';
+	else if (code_point >= 'a' && code_point <= 'f')
+		value = code_point - 'a' + 10;
+	else if (code_point >= 'A' && code_point <= 'F')
+		value = code_point - 'A' + 10;
+	else
+		return false;
+	return true;
 }
 
 int TrigraphReplacement(int third)
@@ -96,61 +66,6 @@ int TrigraphReplacement(int third)
 	}
 }
 
-// Replaces each `??x` trigraph with its single character.  A `??` that is not a
-// trigraph leaves the first question mark alone and rescans from the next code
-// point, which is what makes `???=` become `?` followed by `#`.
-void ReplaceTrigraphs(const std::vector<int>& physical, std::vector<int>& codes,
-	std::vector<std::uint32_t>& origin)
-{
-	std::size_t index = 0;
-	while (index < physical.size())
-	{
-		if (physical[index] == '?' && index + 2 < physical.size() &&
-			physical[index + 1] == '?')
-		{
-			int replacement = TrigraphReplacement(physical[index + 2]);
-			if (replacement >= 0)
-			{
-				codes.push_back(replacement);
-				origin.push_back(static_cast<std::uint32_t>(index));
-				index += 3;
-				continue;
-			}
-		}
-		codes.push_back(physical[index]);
-		origin.push_back(static_cast<std::uint32_t>(index));
-		++index;
-	}
-}
-
-bool HexDigitValue(int code_point, int& value)
-{
-	if (code_point >= '0' && code_point <= '9')
-		value = code_point - '0';
-	else if (code_point >= 'a' && code_point <= 'f')
-		value = code_point - 'a' + 10;
-	else if (code_point >= 'A' && code_point <= 'F')
-		value = code_point - 'A' + 10;
-	else
-		return false;
-	return true;
-}
-
-bool ReadHexQuad(const std::vector<int>& codes, std::size_t begin, std::size_t count, int& value)
-{
-	if (begin + count > codes.size())
-		return false;
-	value = 0;
-	for (std::size_t offset = 0; offset < count; ++offset)
-	{
-		int digit = 0;
-		if (!HexDigitValue(codes[begin + offset], digit))
-			return false;
-		value = (value << 4) | digit;
-	}
-	return true;
-}
-
 // 2.3/1: a universal-character-name may not designate a control character below
 // 0xA0 other than $, @ or `, and may not designate a surrogate.
 void ValidateUniversalCharacterValue(int value)
@@ -159,105 +74,6 @@ void ValidateUniversalCharacterValue(int value)
 		throw SourceError("invalid universal character value");
 	if (value < 0xA0 && value != 0x24 && value != 0x40 && value != 0x60)
 		throw SourceError("invalid universal character value");
-}
-
-bool ReadUniversalCharacterName(const std::vector<int>& codes, std::size_t index, int& value,
-	std::size_t& consumed)
-{
-	if (index + 1 >= codes.size())
-		return false;
-	if (codes[index + 1] == 'u')
-	{
-		if (!ReadHexQuad(codes, index + 2, 4, value))
-			return false;
-		consumed = 6;
-		return true;
-	}
-	if (codes[index + 1] == 'U')
-	{
-		if (!ReadHexQuad(codes, index + 2, 8, value))
-			return false;
-		consumed = 10;
-		return true;
-	}
-	return false;
-}
-
-// Replaces universal-character-names.  A backslash that does not introduce one
-// is copied together with the code point that follows it, so a doubled
-// backslash shields its neighbour from universal-character-name replacement
-// while an odd run still ends in a live escape.
-void ReplaceUniversalCharacterNames(const std::vector<int>& codes,
-	const std::vector<std::uint32_t>& origin, std::vector<int>& replaced,
-	std::vector<std::uint32_t>& replaced_origin)
-{
-	std::size_t index = 0;
-	while (index < codes.size())
-	{
-		std::size_t consumed = 0;
-		int value = 0;
-		if (codes[index] == '\\' && ReadUniversalCharacterName(codes, index, value, consumed))
-		{
-			ValidateUniversalCharacterValue(value);
-			replaced.push_back(value);
-			replaced_origin.push_back(origin[index]);
-			index += consumed;
-			continue;
-		}
-		std::size_t run = codes[index] == '\\' && index + 1 < codes.size() ? 2 : 1;
-		for (std::size_t offset = 0; offset < run; ++offset)
-		{
-			replaced.push_back(codes[index + offset]);
-			replaced_origin.push_back(origin[index + offset]);
-		}
-		index += run;
-	}
-}
-
-// 2.2/1.2: each backslash immediately followed by a new-line is deleted.
-void SpliceLines(const std::vector<int>& codes, const std::vector<std::uint32_t>& origin,
-	std::vector<TranslatedCodePoint>& translated)
-{
-	std::size_t index = 0;
-	while (index < codes.size())
-	{
-		if (codes[index] == '\\' && index + 1 < codes.size() &&
-			codes[index + 1] == kLineFeed)
-		{
-			index += 2;
-			continue;
-		}
-		TranslatedCodePoint entry;
-		entry.physical = origin[index];
-		entry.line = 0;
-		entry.column = 0;
-		entry.code_point = codes[index];
-		translated.push_back(entry);
-		++index;
-	}
-}
-
-void FillPhysicalPositions(const std::vector<int>& physical, std::vector<std::uint32_t>& lines,
-	std::vector<std::uint32_t>& columns)
-{
-	lines.resize(physical.size());
-	columns.resize(physical.size());
-	std::uint32_t line = 1;
-	std::uint32_t column = 1;
-	for (std::size_t index = 0; index < physical.size(); ++index)
-	{
-		lines[index] = line;
-		columns[index] = column;
-		if (physical[index] == kLineFeed)
-		{
-			++line;
-			column = 1;
-		}
-		else
-		{
-			++column;
-		}
-	}
 }
 
 } // namespace
@@ -289,49 +105,260 @@ void AppendCodePointUtf8(int code_point, std::string& out)
 	}
 }
 
-std::string EncodeUtf8(const std::vector<int>& codes, std::size_t begin, std::size_t end)
+TranslatedSource::TranslatedSource(std::string bytes)
+	: buffer_(std::move(bytes))
+	, front_(0)
+	, next_byte_(0)
+	, location_line_(0)
+	, exhausted_(false)
 {
-	std::string encoded;
-	encoded.reserve(end - begin);
-	for (std::size_t index = begin; index < end; ++index)
-		AppendCodePointUtf8(codes[index], encoded);
-	return encoded;
+	// A leading byte order mark is not part of the translation unit.
+	if (buffer_.size() >= 3 && static_cast<unsigned char>(buffer_[0]) == 0xEF &&
+		static_cast<unsigned char>(buffer_[1]) == 0xBB &&
+		static_cast<unsigned char>(buffer_[2]) == 0xBF)
+	{
+		buffer_.erase(0, 3);
+	}
+	// 2.2/1.2: a source file that does not end in a new-line has one appended.
+	if (!buffer_.empty() && buffer_[buffer_.size() - 1] != '\n')
+		buffer_.push_back('\n');
+	BuildLineIndex();
 }
 
-TranslatedSource TranslateSource(const std::string& bytes)
+void TranslatedSource::BuildLineIndex()
 {
-	TranslatedSource source;
-	DecodeSourceBytes(bytes, source.physical);
-	NormalizeBuffer(source.physical);
-
-	std::vector<std::uint32_t> lines;
-	std::vector<std::uint32_t> columns;
-	FillPhysicalPositions(source.physical, lines, columns);
-
-	std::vector<int> trigraph_codes;
-	std::vector<std::uint32_t> trigraph_origin;
-	trigraph_codes.reserve(source.physical.size());
-	trigraph_origin.reserve(source.physical.size());
-	ReplaceTrigraphs(source.physical, trigraph_codes, trigraph_origin);
-
-	std::vector<int> replaced_codes;
-	std::vector<std::uint32_t> replaced_origin;
-	replaced_codes.reserve(trigraph_codes.size());
-	replaced_origin.reserve(trigraph_codes.size());
-	ReplaceUniversalCharacterNames(trigraph_codes, trigraph_origin, replaced_codes,
-		replaced_origin);
-
-	std::vector<int>().swap(trigraph_codes);
-	std::vector<std::uint32_t>().swap(trigraph_origin);
-	SpliceLines(replaced_codes, replaced_origin, source.translated);
-
-	for (std::size_t index = 0; index < source.translated.size(); ++index)
+	line_starts_.push_back(0);
+	for (std::size_t index = 0; index < buffer_.size(); ++index)
 	{
-		std::uint32_t physical = source.translated[index].physical;
-		source.translated[index].line = lines[physical];
-		source.translated[index].column = columns[physical];
+		if (buffer_[index] == '\n' && index + 1 < buffer_.size())
+			line_starts_.push_back(index + 1);
 	}
-	return source;
+}
+
+bool TranslatedSource::DecodeAt(std::size_t byte_offset, int& code_point,
+	std::size_t& next) const
+{
+	if (byte_offset >= buffer_.size())
+		return false;
+	unsigned char lead = static_cast<unsigned char>(buffer_[byte_offset]);
+	std::size_t length = SequenceLength(lead);
+	if (byte_offset + length > buffer_.size())
+		throw SourceError("truncated UTF-8 character");
+
+	int value = length == 1 ? lead : (lead & (0xFF >> (length + 1)));
+	for (std::size_t offset = 1; offset < length; ++offset)
+	{
+		unsigned char continuation = static_cast<unsigned char>(buffer_[byte_offset + offset]);
+		if ((continuation & 0xC0) != 0x80)
+			throw SourceError("invalid UTF-8 continuation byte");
+		value = (value << 6) | (continuation & 0x3F);
+	}
+	if (value < MinimumValueForLength(length) || value > kMaxCodePoint ||
+		(value >= 0xD800 && value <= 0xDFFF))
+	{
+		throw SourceError("invalid UTF-8 scalar value");
+	}
+	code_point = value;
+	next = byte_offset + length;
+	return true;
+}
+
+// The code point beginning at `at` after trigraph replacement, and the byte
+// offset just past it.
+bool TranslatedSource::EffectiveAt(std::size_t at, int& code_point, std::size_t& next) const
+{
+	std::size_t first_end = 0;
+	int first = 0;
+	if (!DecodeAt(at, first, first_end))
+		return false;
+	if (first == '?')
+	{
+		std::size_t second_end = 0;
+		int second = 0;
+		if (DecodeAt(first_end, second, second_end) && second == '?')
+		{
+			std::size_t third_end = 0;
+			int third = 0;
+			if (DecodeAt(second_end, third, third_end))
+			{
+				int replacement = TrigraphReplacement(third);
+				if (replacement >= 0)
+				{
+					code_point = replacement;
+					next = third_end;
+					return true;
+				}
+			}
+		}
+	}
+	code_point = first;
+	next = first_end;
+	return true;
+}
+
+// Reads `count` hexadecimal digits, each already past trigraph replacement.
+bool TranslatedSource::ReadEscapeDigits(std::size_t at, std::size_t count, int& value,
+	std::size_t& next) const
+{
+	value = 0;
+	std::size_t cursor = at;
+	for (std::size_t index = 0; index < count; ++index)
+	{
+		int digit = 0;
+		std::size_t cursor_end = 0;
+		if (!EffectiveAt(cursor, digit, cursor_end))
+			return false;
+		int hexadecimal = 0;
+		if (!HexDigitValue(digit, hexadecimal))
+			return false;
+		value = (value << 4) | hexadecimal;
+		cursor = cursor_end;
+	}
+	next = cursor;
+	return true;
+}
+
+// Matches `u` or `U` followed by four or eight hexadecimal digits, all read
+// after trigraph replacement.
+bool TranslatedSource::ReadUniversalCharacterName(std::size_t at, int& value,
+	std::size_t& end) const
+{
+	int introducer = 0;
+	std::size_t introducer_end = 0;
+	if (!EffectiveAt(at, introducer, introducer_end))
+		return false;
+	if (introducer != 'u' && introducer != 'U')
+		return false;
+	std::size_t digits_end = 0;
+	if (!ReadEscapeDigits(introducer_end, introducer == 'u' ? 4 : 8, value, digits_end))
+		return false;
+	end = digits_end;
+	return true;
+}
+
+void TranslatedSource::Push(int code_point, std::size_t byte_offset)
+{
+	Entry entry;
+	entry.byte_offset = byte_offset;
+	entry.code_point = code_point;
+	pending_.push_back(entry);
+}
+
+void TranslatedSource::DropLast()
+{
+	pending_.pop_back();
+}
+
+// Produces one translated code point.  The order of the rewrites is the
+// standard's: trigraph replacement, then universal-character-name replacement,
+// then line splicing.  A backslash that does not introduce a
+// universal-character-name consumes the code point after it verbatim, so a
+// doubled backslash shields its neighbour from replacement; splicing then
+// removes any backslash that ends up immediately before a new-line.
+void TranslatedSource::Produce()
+{
+	if (next_byte_ >= buffer_.size())
+	{
+		exhausted_ = true;
+		return;
+	}
+
+	std::size_t after = 0;
+	int code_point = 0;
+	EffectiveAt(next_byte_, code_point, after);
+
+	if (code_point == '\\')
+	{
+		int value = 0;
+		std::size_t name_end = 0;
+		if (ReadUniversalCharacterName(after, value, name_end))
+		{
+			ValidateUniversalCharacterValue(value);
+			Push(value, next_byte_);
+			next_byte_ = name_end;
+			return;
+		}
+
+		Push(code_point, next_byte_);
+		if (after >= buffer_.size())
+		{
+			next_byte_ = after;
+			return;
+		}
+		std::size_t partner_end = 0;
+		int partner = 0;
+		EffectiveAt(after, partner, partner_end);
+		if (partner == kLineFeed)
+		{
+			DropLast();
+			next_byte_ = partner_end;
+			return;
+		}
+		Push(partner, after);
+		next_byte_ = partner_end;
+		if (partner != '\\' || partner_end >= buffer_.size())
+			return;
+		// A backslash arriving as the second half of a pair can itself be the
+		// backslash of a splice.
+		std::size_t following_end = 0;
+		int following = 0;
+		if (EffectiveAt(partner_end, following, following_end) && following == kLineFeed)
+		{
+			DropLast();
+			next_byte_ = following_end;
+		}
+		return;
+	}
+
+	Push(code_point, next_byte_);
+	next_byte_ = after;
+}
+
+void TranslatedSource::Compact()
+{
+	pending_.erase(pending_.begin(), pending_.begin() + static_cast<std::ptrdiff_t>(front_));
+	front_ = 0;
+}
+
+void TranslatedSource::Refill(std::size_t wanted)
+{
+	while (!exhausted_ && pending_.size() - front_ <= wanted)
+		Produce();
+}
+
+void TranslatedSource::ResumeAt(std::size_t byte_offset)
+{
+	pending_.clear();
+	front_ = 0;
+	next_byte_ = byte_offset;
+	exhausted_ = byte_offset >= buffer_.size();
+}
+
+SourceLocation TranslatedSource::LocationOf(std::size_t byte_offset)
+{
+	SourceLocation location;
+	location.line = 1;
+	location.column = 1;
+	if (line_starts_.empty())
+		return location;
+	if (byte_offset >= buffer_.size())
+		byte_offset = buffer_.size() == 0 ? 0 : buffer_.size() - 1;
+
+	if (location_line_ >= line_starts_.size() || line_starts_[location_line_] > byte_offset)
+	{
+		std::vector<std::size_t>::const_iterator it =
+			std::upper_bound(line_starts_.begin(), line_starts_.end(), byte_offset);
+		location_line_ = it == line_starts_.begin()
+			? 0 : static_cast<std::size_t>(it - line_starts_.begin()) - 1;
+	}
+	while (location_line_ + 1 < line_starts_.size() &&
+		line_starts_[location_line_ + 1] <= byte_offset)
+	{
+		++location_line_;
+	}
+	location.line = location_line_ + 1;
+	location.column = byte_offset - line_starts_[location_line_] + 1;
+	return location;
 }
 
 } // namespace preprocess

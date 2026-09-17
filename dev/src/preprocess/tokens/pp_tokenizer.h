@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <string>
-#include <vector>
 
 #include "preprocess/tokens/IPPTokenStream.h"
 #include "preprocess/tokens/pp_source_translation.h"
@@ -14,10 +13,10 @@ namespace cppgm
 namespace preprocess
 {
 
-// Recognises the preprocessing-tokens of one translated source buffer and
-// reports them to an IPPTokenStream.  The recogniser is a single greedy pass
-// over the code point stream: each position is inspected once, and the only
-// allocation is the spelling handed to the stream.
+// Recognises the preprocessing-tokens of one translated source and reports them
+// to an IPPTokenStream.  The recogniser is a single greedy pass: each code point
+// is inspected once, and the only storage it keeps is the spelling of the token
+// it is about to report plus the cursor's bounded lookahead window.
 //
 // Header-names are context sensitive ([lex.header]).  The recogniser tracks
 // whether the most recent significant tokens were (start of line or new-line)
@@ -25,9 +24,9 @@ namespace preprocess
 class PPTokenizer
 {
 public:
-	PPTokenizer(const TranslatedSource& source, IPPTokenStream& output);
+	PPTokenizer(TranslatedSource& source, IPPTokenStream& output);
 
-	// Recognises every token in the buffer and finishes with the eof event.
+	// Recognises every token in the source and finishes with the eof event.
 	void Tokenize();
 
 private:
@@ -41,18 +40,17 @@ private:
 		role_other
 	};
 
-	int CodeAt(std::size_t index) const;
-	int Current() const;
-	std::size_t MatchOperator(std::size_t index) const;
-	bool MatchesOperator(std::size_t index, const char* spelling) const;
+	int CodeAt(std::size_t ahead) const;
+	std::size_t MatchOperator(std::size_t ahead) const;
+	bool MatchesOperator(std::size_t ahead, const char* spelling) const;
 
-	void ReportLocation(std::size_t index) const;
-	std::string TranslatedSpelling(std::size_t begin, std::size_t end) const;
-	std::string PhysicalSpelling(std::size_t begin, std::size_t end) const;
+	void BeginToken();
+	void Consume(std::size_t count);
+	void ReportLocation();
 	void NoteEmitted(TokenRole role);
 
-	void EmitOperator(std::size_t begin, std::size_t length);
-	void EmitNonWhitespaceCharacter(std::size_t begin);
+	void EmitOperator(std::size_t length);
+	void EmitNonWhitespaceCharacter();
 	void ScanWhitespaceSequence();
 	bool StartsHeaderName() const;
 	void ScanHeaderName();
@@ -62,18 +60,15 @@ private:
 	void ScanCharacterLiteral(std::size_t prefix_length);
 	void ScanStringLiteral(std::size_t prefix_length);
 	void ScanRawStringLiteral(std::size_t quote_offset);
-	bool RawStringTerminatesAt(const std::vector<int>& physical, std::size_t at,
-		std::size_t delimiter_begin, std::size_t delimiter_length) const;
 
 	void SkipBlockComment();
 	void SkipEscapeSequence();
-	bool HasHexQuad(std::size_t begin, std::size_t count) const;
-	bool ScanUdSuffix();
-	std::size_t AdvancePastPhysical(std::size_t from, std::size_t physical_end) const;
+	bool HasHexQuad(std::size_t ahead, std::size_t count) const;
 
-	const TranslatedSource& source_;
+	TranslatedSource& source_;
 	IPPTokenStream& output_;
-	std::size_t position_;
+	std::string spelling_;
+	std::size_t token_byte_offset_;
 	bool line_start_;
 	bool after_hash_;
 	bool after_include_;

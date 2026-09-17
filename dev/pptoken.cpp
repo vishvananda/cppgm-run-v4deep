@@ -15,6 +15,26 @@ using namespace std;
 // reports the resulting preprocessing-token sequence.  The phases live in
 // preprocess/tokens so that the later staged tools share them.
 
+// Reads standard input into one buffer.  The read is chunked so the stream
+// buffer moves whole blocks instead of one code unit per virtual call, and the
+// buffer grows geometrically so no intermediate copy of the source survives.
+string ReadStandardInput()
+{
+	const size_t Chunk = 1 << 16;
+	string input;
+	streambuf* source = cin.rdbuf();
+	for (;;)
+	{
+		size_t filled = input.size();
+		input.resize(filled + Chunk);
+		streamsize got = source->sgetn(&input[filled], static_cast<streamsize>(Chunk));
+		input.resize(filled + static_cast<size_t>(got));
+		if (got != static_cast<streamsize>(Chunk))
+			break;
+	}
+	return input;
+}
+
 bool HasBatchStdinArg(int argc, char** argv)
 {
 	for (int i = 1; i < argc; i++)
@@ -43,12 +63,10 @@ int main(int argc, char** argv)
 		if (HasBatchStdinArg(argc, argv))
 			return RunNotImplementedBatchMode();
 
-		ostringstream buffer;
-		buffer << cin.rdbuf();
-		string input = buffer.str();
+		string input = ReadStandardInput();
 
 		DebugPPTokenStream output;
-		cppgm::preprocess::TranslatedSource source = cppgm::preprocess::TranslateSource(input);
+		cppgm::preprocess::TranslatedSource source(std::move(input));
 		cppgm::preprocess::PPTokenizer tokenizer(source, output);
 		tokenizer.Tokenize();
 
