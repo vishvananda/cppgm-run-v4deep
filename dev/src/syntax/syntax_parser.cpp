@@ -1384,7 +1384,8 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		return node;
 	}
 	{
-		PushScope();
+		// A class's member names are visible to the declarations that follow
+		// it, so they bind in the enclosing scope rather than one of their own.
 		classes_.push_back(name);
 		++declaration_only_;
 		Advance();
@@ -1395,7 +1396,6 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		--declaration_only_;
 		Expect(posttoken::OP_RBRACE, "`}`");
 		classes_.pop_back();
-		PopScope();
 	}
 	if(require_semicolon || At(posttoken::OP_SEMICOLON))
 	{
