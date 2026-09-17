@@ -64,6 +64,7 @@ my @rejected = (
 	'"foo"', "u8\"x\"", "L\"x\"", '3.2', '1e10', '0x1p3', '"a"_x', '1.0_x',
 	"'a'_x", '5uu', '08', '@', '\\', '::', '...', '[', ']', '{', '}', ';',
 	',', '=', '++', '--', '->*', '.*', 'R"(a)"', '0x',
+	'#', '##', '#include <a>', '%:include <b>', 'defined defined',
 );
 
 # Skeleton positions a rejected token is planted in.

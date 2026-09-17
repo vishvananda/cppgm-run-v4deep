@@ -16,53 +16,33 @@ using posttoken::ETokenType;
 
 // The precedence levels of the handout's grammar, innermost first.  Each level
 // hands off to the next-tighter one, exactly as the productions nest.
-const CtrlExpression::BinOpEntry kMultiplicative[] =
+// The handout's controlling-expression grammar names one production per
+// precedence level; this is the same information as a table, because the level
+// loop is now one function.  All of these operators are left associative, which
+// is what makes the loop's `precedence + 1` recursion bound correct.
+const CtrlExpression::BinOpEntry kBinaryOps[] =
 {
-	{posttoken::OP_STAR, CtrlExpression::BIN_MUL},
-	{posttoken::OP_DIV, CtrlExpression::BIN_DIV},
-	{posttoken::OP_MOD, CtrlExpression::BIN_MOD}
+	{posttoken::OP_LOR, CtrlExpression::BIN_LOR, 1},
+	{posttoken::OP_LAND, CtrlExpression::BIN_LAND, 2},
+	{posttoken::OP_BOR, CtrlExpression::BIN_OR, 3},
+	{posttoken::OP_XOR, CtrlExpression::BIN_XOR, 4},
+	{posttoken::OP_AMP, CtrlExpression::BIN_AND, 5},
+	{posttoken::OP_EQ, CtrlExpression::BIN_EQ, 6},
+	{posttoken::OP_NE, CtrlExpression::BIN_NE, 6},
+	{posttoken::OP_LT, CtrlExpression::BIN_LT, 7},
+	{posttoken::OP_GT, CtrlExpression::BIN_GT, 7},
+	{posttoken::OP_LE, CtrlExpression::BIN_LE, 7},
+	{posttoken::OP_GE, CtrlExpression::BIN_GE, 7},
+	{posttoken::OP_LSHIFT, CtrlExpression::BIN_SHL, 8},
+	{posttoken::OP_RSHIFT, CtrlExpression::BIN_SHR, 8},
+	{posttoken::OP_PLUS, CtrlExpression::BIN_ADD, 9},
+	{posttoken::OP_MINUS, CtrlExpression::BIN_SUB, 9},
+	{posttoken::OP_STAR, CtrlExpression::BIN_MUL, 10},
+	{posttoken::OP_DIV, CtrlExpression::BIN_DIV, 10},
+	{posttoken::OP_MOD, CtrlExpression::BIN_MOD, 10}
 };
 
-const CtrlExpression::BinOpEntry kAdditive[] =
-{
-	{posttoken::OP_PLUS, CtrlExpression::BIN_ADD},
-	{posttoken::OP_MINUS, CtrlExpression::BIN_SUB}
-};
-
-const CtrlExpression::BinOpEntry kShift[] =
-{
-	{posttoken::OP_LSHIFT, CtrlExpression::BIN_SHL},
-	{posttoken::OP_RSHIFT, CtrlExpression::BIN_SHR}
-};
-
-const CtrlExpression::BinOpEntry kRelational[] =
-{
-	{posttoken::OP_LT, CtrlExpression::BIN_LT},
-	{posttoken::OP_GT, CtrlExpression::BIN_GT},
-	{posttoken::OP_LE, CtrlExpression::BIN_LE},
-	{posttoken::OP_GE, CtrlExpression::BIN_GE}
-};
-
-const CtrlExpression::BinOpEntry kEquality[] =
-{
-	{posttoken::OP_EQ, CtrlExpression::BIN_EQ},
-	{posttoken::OP_NE, CtrlExpression::BIN_NE}
-};
-
-const CtrlExpression::BinOpEntry kAnd[] =
-{
-	{posttoken::OP_AMP, CtrlExpression::BIN_AND}
-};
-
-const CtrlExpression::BinOpEntry kExclusiveOr[] =
-{
-	{posttoken::OP_XOR, CtrlExpression::BIN_XOR}
-};
-
-const CtrlExpression::BinOpEntry kInclusiveOr[] =
-{
-	{posttoken::OP_BOR, CtrlExpression::BIN_OR}
-};
+const unsigned kLowestBinaryPrecedence = 1;
 
 // Appends the decimal spelling of an unsigned value, low digit last.  The
 // buffer is a local array, so reporting a result allocates nothing.
@@ -129,14 +109,14 @@ bool CtrlExpression::IsIdentifierOrKeyword(const CtrlToken& token)
 	return token.kind == kCtrlSimple && IsKeyword(token.simple);
 }
 
-bool CtrlExpression::LookupBinOp(ETokenType type, const BinOpEntry* entries,
-                                 std::size_t count, EBinOp& op)
+bool CtrlExpression::LookupBinOp(ETokenType type, BinOpEntry& entry)
 {
+	const std::size_t count = sizeof(kBinaryOps) / sizeof(kBinaryOps[0]);
 	for (std::size_t index = 0; index < count; ++index)
 	{
-		if (entries[index].token == type)
+		if (kBinaryOps[index].token == type)
 		{
-			op = entries[index].op;
+			entry = kBinaryOps[index];
 			return true;
 		}
 	}
@@ -172,8 +152,12 @@ void CtrlExpression::Evaluate(std::string& out)
 
 bool CtrlExpression::ParseControllingExpression(bool live, Value& out)
 {
+	DepthGuard guard(depth_, kMaxNesting);
+	if (!guard.Within())
+		return false;
+
 	Value condition;
-	if (!ParseLogicalOr(live, condition))
+	if (!ParseBinary(kLowestBinaryPrecedence, live, condition))
 		return false;
 
 	if (AtEnd() || Peek().kind != kCtrlSimple || Peek().simple != posttoken::OP_QMARK)
@@ -210,133 +194,60 @@ bool CtrlExpression::ParseControllingExpression(bool live, Value& out)
 	return true;
 }
 
-bool CtrlExpression::ParseLogicalOr(bool live, Value& out)
+bool CtrlExpression::ParseBinary(unsigned min_precedence, bool live, Value& out)
 {
-	Value left;
-	if (!ParseLogicalAnd(live, left))
+	if (!ParseUnary(live, out))
 		return false;
 
-	while (!AtEnd() && Peek().kind == kCtrlSimple && Peek().simple == posttoken::OP_LOR)
+	for (;;)
 	{
+		BinOpEntry entry;
+		if (AtEnd() || Peek().kind != kCtrlSimple || !LookupBinOp(Peek().simple, entry))
+			return true;
+		// An operator that binds more loosely than this level is the caller's;
+		// leaving it for the caller is what makes the recursion terminate.
+		if (entry.precedence < min_precedence)
+			return true;
+
 		Consume();
-		// 5.15: the right operand is evaluated only when the left one
-		// compares equal to zero.
-		const bool right_live = live && left.bits == 0;
+		// 5.14 and 5.15: the right operand is evaluated only when the left one
+		// has not already decided the result.  That is the one place the
+		// operand's liveness depends on a value rather than on the schedule.
+		bool right_live = live;
+		if (entry.op == BIN_LAND)
+			right_live = live && out.bits != 0;
+		else if (entry.op == BIN_LOR)
+			right_live = live && out.bits == 0;
+
+		// `precedence + 1` is the left associativity: an operator of the same
+		// level stops the right operand, so it is applied to the left one next.
 		Value right;
-		if (!ParseLogicalAnd(right_live, right))
+		if (!ParseBinary(entry.precedence + 1, right_live, right))
 			return false;
-		out.bits = (left.bits != 0) || (right.bits != 0);
-		out.is_unsigned = false;
-		left = out;
-	}
 
-	out = left;
-	return true;
-}
-
-bool CtrlExpression::ParseLogicalAnd(bool live, Value& out)
-{
-	Value left;
-	if (!ParseInclusiveOr(live, left))
-		return false;
-
-	while (!AtEnd() && Peek().kind == kCtrlSimple && Peek().simple == posttoken::OP_LAND)
-	{
-		Consume();
-		// 5.14: the right operand is evaluated only when the left one does not
-		// compare equal to zero.
-		const bool right_live = live && left.bits != 0;
-		Value right;
-		if (!ParseInclusiveOr(right_live, right))
-			return false;
-		out.bits = (left.bits != 0) && (right.bits != 0);
-		out.is_unsigned = false;
-		left = out;
-	}
-
-	out = left;
-	return true;
-}
-
-bool CtrlExpression::ParseInclusiveOr(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseExclusiveOr,
-	                        kInclusiveOr, sizeof(kInclusiveOr) / sizeof(kInclusiveOr[0]));
-}
-
-bool CtrlExpression::ParseExclusiveOr(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseAnd,
-	                        kExclusiveOr, sizeof(kExclusiveOr) / sizeof(kExclusiveOr[0]));
-}
-
-bool CtrlExpression::ParseAnd(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseEquality,
-	                        kAnd, sizeof(kAnd) / sizeof(kAnd[0]));
-}
-
-bool CtrlExpression::ParseEquality(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseRelational,
-	                        kEquality, sizeof(kEquality) / sizeof(kEquality[0]));
-}
-
-bool CtrlExpression::ParseRelational(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseShift,
-	                        kRelational, sizeof(kRelational) / sizeof(kRelational[0]));
-}
-
-bool CtrlExpression::ParseShift(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseAdditive,
-	                        kShift, sizeof(kShift) / sizeof(kShift[0]));
-}
-
-bool CtrlExpression::ParseAdditive(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseMultiplicative,
-	                        kAdditive, sizeof(kAdditive) / sizeof(kAdditive[0]));
-}
-
-bool CtrlExpression::ParseMultiplicative(bool live, Value& out)
-{
-	return ParseBinaryLevel(live, out, &CtrlExpression::ParseUnary,
-	                        kMultiplicative, sizeof(kMultiplicative) / sizeof(kMultiplicative[0]));
-}
-
-bool CtrlExpression::ParseBinaryLevel(bool live, Value& out, LevelFn next,
-                                      const BinOpEntry* entries, std::size_t count)
-{
-	Value left;
-	if ((this->*next)(live, left))
-	{
-		for (;;)
+		if (entry.op == BIN_LAND || entry.op == BIN_LOR)
 		{
-			EBinOp op;
-			if (AtEnd() || Peek().kind != kCtrlSimple ||
-			    !LookupBinOp(Peek().simple, entries, count, op))
-			{
-				break;
-			}
-			Consume();
-			Value right;
-			if (!(this->*next)(live, right))
-				return false;
-			Value result;
-			if (!ApplyBinary(op, live, left, right, result))
-				return false;
-			left = result;
+			// 5.14 and 5.15: the result is `bool`, so it is signed `intmax_t`.
+			out.bits = entry.op == BIN_LAND
+				? ((out.bits != 0) && (right.bits != 0))
+				: ((out.bits != 0) || (right.bits != 0));
+			out.is_unsigned = false;
+			continue;
 		}
-		out = left;
-		return true;
+
+		Value result;
+		if (!ApplyBinary(entry.op, live, out, right, result))
+			return false;
+		out = result;
 	}
-	return false;
 }
 
 bool CtrlExpression::ParseUnary(bool live, Value& out)
 {
+	DepthGuard guard(depth_, kMaxNesting);
+	if (!guard.Within())
+		return false;
+
 	if (!AtEnd() && Peek().kind == kCtrlSimple)
 	{
 		switch (Peek().simple)

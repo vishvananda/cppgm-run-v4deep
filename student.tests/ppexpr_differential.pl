@@ -85,6 +85,42 @@ if ($plain_exit != 0 || $flag_exit != $plain_exit || $flag_out ne $plain_out)
 	exit(1);
 }
 
+# The nesting bound: just inside it the tool must agree with the reference
+# exactly as everywhere else, and just outside it the line must be reported as
+# an error with a normal exit status - never a signal, and never a truncated
+# output.  The deep input is generated here rather than curated so the two
+# sides of the bound are next to each other.
+my $bound_failures = 0;
+for my $depth (1024, 4095, 5000, 50000)
+{
+	my $text = ('(' x $depth) . '1' . (')' x $depth) . "\n";
+	my ($me, $mo) = run_tool($mine, $text);
+	my ($re, $ro) = run_tool($reference, $text);
+	my $bad = $me != 0;
+	if ($depth <= 4095)
+	{
+		# Inside the bound the two tools must agree exactly.
+		$bad = 1 if $me != $re || $mo ne $ro;
+	}
+	else
+	{
+		# Outside it the line is an invalid controlling expression, and the
+		# run still succeeds - a crash would leave the output truncated.
+		$bad = 1 if $mo ne "error\neof";
+	}
+	if ($bad)
+	{
+		++$bound_failures;
+		print "NESTING BOUND MISMATCH at depth $depth: mine exit=$me ref exit=$re\n";
+		print "  mine:\n$mo\n  ref:\n$ro\n";
+	}
+}
+if ($bound_failures != 0)
+{
+	print "nesting bound check failed\n";
+	exit(1);
+}
+
 # Boundaries the fixture suite does not pin.  They are always checked, before
 # the random inputs, so a regression is reported even when the seed changes.
 my @curated = (
@@ -158,6 +194,13 @@ my @curated = (
 	"0&&(9223372036854775807+1)\n", "18446744073709551615u + 1\n",
 	"1u + 9223372036854775807\n", "0x8000000000000000 * 2\n",
 	"1 << 63\n", "2 << 62\n", "9223372036854775807 * 1\n",
+	# The nesting bound.  The parser is recursive descent, so the C stack grows
+	# with the expression's nesting; the stage bounds that with an explicit
+	# limit and reports the line as an invalid controlling expression past it,
+	# where the reference - which parses nesting from the heap - still computes
+	# a value.  This is the stage's one deliberate divergence, so it is not in
+	# the reference-compared list above; the check below pins both sides of the
+	# bound instead.
 	# Integer-literal boundaries across the bases and suffixes.
 	"01777777777777777777777\n", "0x7fffffffffffffff\n",
 	"0b1010\n", "0B1010\n", "08\n", "1'000\n", "1e1\n", "0e1\n",
