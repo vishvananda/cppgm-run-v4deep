@@ -446,24 +446,38 @@ bool HasHexadecimalPrefix(const std::string& text)
 
 // The starter kit's scan is the course's required one, and it is used for
 // every literal it converts.  Two cases are outside what a C++11 stream
-// extraction can express, and in both the reference frontend reports the C
-// library's correctly rounded result:
+// extraction can express, and neither changes a required behaviour:
 //
 //   - 2.14.4 has a hexadecimal floating form, but the C++11 iostream grammar
 //     does not, so `iss >> x` reads `0x1.8p3` as `0` and stops;
 //   - an out-of-range value is stored as the type's extreme rather than as the
-//     infinite value the C library returns.
+//     infinite value the C library returns.  The handout makes the range check
+//     optional and untested for PA2.
 //
 // Both are read with `strto*`, which C99 and C++11 require to accept the
-// hexadecimal form and which is correctly rounded.  The handout makes the
-// range check optional and untested for PA2, so this changes no required
-// behaviour; it removes a divergence from the reference.  A literal that
-// really is the type's extreme is converted to that same extreme by `strto*`,
-// so preferring its result cannot lose a representable one.
+// hexadecimal form.  A decimal literal that really is the type's extreme is
+// converted to that same extreme by `strto*`, so preferring its result cannot
+// lose a representable one.
+//
+// The hexadecimal form is the one place where "correctly rounded for the
+// literal's type" is *not* what the reference reports: it reads the literal as
+// a `long double` and narrows it, so a mantissa long enough to need a rounding
+// step at 80-bit precision rounds twice.  `0x1.0000000000000801p0` is exactly
+// 1 + 2049/2^64, which rounds to the 80-bit neighbour 1 + 2^-53 and then, by
+// round-half-to-even at the double halfway point, down to 1.0; a correctly
+// rounded `strtod` gives 1 + 2^-52.  The two agree on every mantissa short
+// enough not to round at 80 bits, which is why `0x1.8p3` and the ordinary
+// cases are unaffected, and the handout makes the reference's bit pattern the
+// required PA2 output, so the same two-step conversion is used here.
+long double ScanHexadecimalValue(const std::string& text)
+{
+	return std::strtold(text.c_str(), 0);
+}
+
 float ScanFloatText(const std::string& text)
 {
 	if (HasHexadecimalPrefix(text))
-		return std::strtof(text.c_str(), 0);
+		return static_cast<float>(ScanHexadecimalValue(text));
 	float value = PA2Decode_float(text);
 	return value == std::numeric_limits<float>::max()
 		? std::strtof(text.c_str(), 0) : value;
@@ -472,7 +486,7 @@ float ScanFloatText(const std::string& text)
 double ScanDoubleText(const std::string& text)
 {
 	if (HasHexadecimalPrefix(text))
-		return std::strtod(text.c_str(), 0);
+		return static_cast<double>(ScanHexadecimalValue(text));
 	double value = PA2Decode_double(text);
 	return value == std::numeric_limits<double>::max()
 		? std::strtod(text.c_str(), 0) : value;
@@ -481,7 +495,7 @@ double ScanDoubleText(const std::string& text)
 long double ScanLongDoubleText(const std::string& text)
 {
 	if (HasHexadecimalPrefix(text))
-		return std::strtold(text.c_str(), 0);
+		return ScanHexadecimalValue(text);
 	long double value = PA2Decode_long_double(text);
 	return value == std::numeric_limits<long double>::max()
 		? std::strtold(text.c_str(), 0) : value;
