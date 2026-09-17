@@ -68,48 +68,34 @@ std::string ReadFileBytes(const std::string& path)
 	return bytes;
 }
 
-// The integer a `#line` operand names, with any integer suffix ignored.
+// How large a `#line` operand may be: the reference reads one as decimal digits
+// that post-tokenize to a positive integer of a signed 64-bit type, and a
+// magnitude past that is not one.
+const unsigned long long kMaxLineNumber = 9223372036854775807ull;
+
+// How many files may be open at once, counting the primary source.
+const std::size_t kMaxIncludeDepth = 256;
+
+// The integer a `#line` operand names.  The digits are decimal and nothing else
+// may follow them - a base prefix, an integer suffix or a magnitude past the
+// type all make the operand stop being a positive integer, and the reference
+// rejects each of them rather than reading the prefix and ignoring the rest.
 unsigned long long DecodeLineNumber(const std::string& spelling, bool& ok)
 {
 	ok = false;
+	if (spelling.empty())
+		return 0;
 	unsigned long long value = 0;
-	std::size_t at = 0;
-	int base = 10;
-	if (spelling.size() > 2 && spelling[0] == '0' &&
-	    (spelling[1] == 'x' || spelling[1] == 'X'))
-	{
-		base = 16;
-		at = 2;
-	}
-	else if (spelling.size() > 1 && spelling[0] == '0')
-	{
-		base = 8;
-		at = 1;
-	}
-	std::size_t digits = 0;
-	for (; at < spelling.size(); ++at)
+	for (std::size_t at = 0; at < spelling.size(); ++at)
 	{
 		const char character = spelling[at];
-		int digit = -1;
-		if (character >= '0' && character <= '9')
-			digit = character - '0';
-		else if (base == 16 && character >= 'a' && character <= 'f')
-			digit = character - 'a' + 10;
-		else if (base == 16 && character >= 'A' && character <= 'F')
-			digit = character - 'A' + 10;
-		if (digit < 0 || digit >= base)
-			break;
-		value = value * static_cast<unsigned>(base) + static_cast<unsigned>(digit);
-		++digits;
-	}
-	for (; at < spelling.size(); ++at)
-	{
-		const char suffix = spelling[at];
-		if (suffix != 'u' && suffix != 'U' && suffix != 'l' && suffix != 'L')
+		if (character < '0' || character > '9')
 			return 0;
+		const unsigned digit = static_cast<unsigned>(character - '0');
+		if (value > (kMaxLineNumber - digit) / 10)
+			return 0;
+		value = value * 10 + digit;
 	}
-	if (digits == 0)
-		return 0;
 	ok = true;
 	return value;
 }
@@ -330,6 +316,15 @@ void Preprocessor::ExpandBuiltinMacro(EPPBuiltinMacro which, const PPToken& head
 
 void Preprocessor::ProcessFile(const std::string& path)
 {
+	// An include chain is followed by recursion, so it needs a bound: a file
+	// that includes itself, directly or through a cycle, would otherwise run
+	// until the machine's stack is gone.  255 nested includes is the depth the
+	// reference allows, and a chain deeper than that is an error rather than a
+	// crash.  `#pragma once` is what an ordinary guarded header uses and it
+	// keeps such a file from reaching this at all.
+	if (stack_.size() >= kMaxIncludeDepth)
+		throw PreprocessError("source inclusion depth exceeded");
+
 	std::string bytes = ReadFileBytes(path);
 
 	const std::uint32_t index = static_cast<std::uint32_t>(files_.size());
@@ -457,6 +452,11 @@ void Preprocessor::EndTextSequence()
 		expander_.FinishTextSequence();
 		text_.clear();
 	}
+	// `_Pragma` is recognized only in a text-sequence, so an operator that one
+	// did not finish is not one the next can finish either: the handout makes
+	// an occurrence not followed by `( string-literal )` an error.
+	if (pragma_step_ != 0)
+		throw PreprocessError("malformed _Pragma operator");
 	// Every node the sequence made is unreachable once it has drained: its
 	// tokens went to the sink, the macro table or a local, and none of those
 	// keeps a paint.  Releasing here rather than at the end of the translation
