@@ -46,11 +46,15 @@ stream:
 - Comparisons run beyond the fixtures (personal harnesses, not graded):
   - `student.tests/posttoken_differential.pl` - randomised differential over
     the pp-number grammar, type selection, escapes, phase 6 unions and raw
-    strings.  1200 inputs x 3 seeds plus the curated boundary list: no
-    divergence from the reference.
+    strings.  1500 inputs x 4 seeds plus the curated boundary list: no
+    divergence from the reference.  It also pins the tool's command-line
+    surface: every flag, including the harness's `--batch-stdin`, must be as
+    inert as it is for the reference.
   - Exhaustive sweeps against the reference: 4436 generated pp-numbers,
     1000 character literals and 875 string literals, each compared one input
     per process.  No divergence in stdout or exit status.
+  - `dev/posttoken` builds warning-free under the assignment's
+    `-std=gnu++11 -Wall -O3`.
 - Independent-review questions (not waived, not blockers for this handoff):
   - The ud-suffix rule "must begin with `_`" is course-defined behaviour taken
     from the checked-in fixtures (`700`, `750`) and the reference; it is a
@@ -72,6 +76,16 @@ stream:
     is worth an independent look.
   - Phase 4 is a strict no-op here because PA2's input never contains a
     directive; the preprocessor that replaces it belongs to a later stage.
+  - Identifier interning and compact token identity are owned by the parsing
+    stage, not this one: `posttoken` is a text-output tool whose contract is
+    the spelling of every token, and phase 3 already hands borrowed spellings
+    through `IPPTokenStream`.  `simple_token`'s table is the bounded read-only
+    metadata that interned identifiers will key on; building the intern table
+    now would have no consumer.
+  - No phase-time/peak-memory telemetry surface is added at this stage.  The
+    specification's counters cover allocations, candidates, specialization
+    transitions, caches, worklists and IR sizes, none of which exist yet, and
+    `posttoken`'s only required output is the token stream.
 
 ## Performance evidence
 

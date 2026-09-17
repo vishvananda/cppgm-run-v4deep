@@ -193,6 +193,29 @@ sub run_tool
 	return ($exit, $data);
 }
 
+# The tool's command-line surface: it takes no options, so the harness worker
+# flag must be inert.  The skeleton answers `--batch-stdin` with a per-line
+# "not implemented" record until the tool is written; an implemented tool that
+# keeps that stub silently reports failure for every request, so pin the flag
+# here against the reference before the fuzz starts.
+my $cli_failures = 0;
+for my $args ('', '--batch-stdin', '-o /tmp/posttoken_differential.out')
+{
+	my ($mine_exit, $mine_out) = run_tool("$mine $args", "int a;\n");
+	my ($ref_exit, $ref_out) = run_tool("$reference $args", "int a;\n");
+	if ($mine_exit != $ref_exit || $mine_out ne $ref_out)
+	{
+		++$cli_failures;
+		print "CLI MISMATCH with args '$args': mine exit=$mine_exit ref exit=$ref_exit\n";
+		print "  mine:\n$mine_out\n  ref:\n$ref_out\n";
+	}
+}
+if ($cli_failures != 0)
+{
+	print "command-line surface check failed\n";
+	exit(1);
+}
+
 srand($seed);
 my $mismatches = 0;
 my @inputs = (@curated, map { make_input($_) } (1 .. $iterations));
