@@ -66,18 +66,19 @@ private:
 	std::string JoinedText(std::size_t first, std::size_t last) const;
 
 	// --- rollback -------------------------------------------------------
-	struct Mark
-	{
-		std::size_t pos;
-		bool rshift;
-		std::size_t nodes;
-		std::size_t scopes;
-		std::size_t scope_size;
-		std::size_t classes;
-	};
+	// A cursor checkpoint: the token position, the split `>>`, and the counts
+	// of the tree, the name table and the class stack that a failed
+	// alternative restores.
+	struct Mark { std::size_t pos; bool rshift; std::size_t nodes; std::size_t scopes; std::size_t bindings; std::size_t classes; };
+
+	// One name a scope bound, and the category the name held in that scope
+	// before it, so undoing the binding restores the name rather than
+	// erasing it.  `kNameUnknown` means the scope did not hold the name.
+	struct Binding { std::size_t scope; std::string name; int previous; };
 
 	Mark Take() const;
 	void Rollback(const Mark& mark);
+	void DropBindings(std::size_t scope);
 
 	// --- nodes ----------------------------------------------------------
 	int Tag(const char* name);
@@ -225,6 +226,8 @@ private:
 	int angle_depth_;
 	int nested_delim_;
 	std::vector<std::map<std::string, int> > scopes_;
+	// Every binding in order, which is what a rollback undoes.
+	std::vector<Binding> bindings_;
 	std::vector<std::string> classes_;
 	// The name the declarator just parsed declared, for the declaration that
 	// has to bind it.

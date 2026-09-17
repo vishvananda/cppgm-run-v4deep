@@ -411,7 +411,7 @@ Parser::Mark Parser::Take() const
 	mark.rshift = rshift_split_;
 	mark.nodes = arena_.NodeCount();
 	mark.scopes = scopes_.size();
-	mark.scope_size = scopes_.back().size();
+	mark.bindings = bindings_.size();
 	mark.classes = classes_.size();
 	return mark;
 }
@@ -423,17 +423,30 @@ void Parser::Rollback(const Mark& mark)
 	arena_.DropTo(mark.nodes);
 	while(scopes_.size() > mark.scopes)
 	{
+		DropBindings(scopes_.size() - 1);
 		scopes_.pop_back();
 	}
-	if(scopes_.back().size() > mark.scope_size)
+	// The bindings the alternative made come undone newest first, so a name it
+	// shadowed gets the category the earlier declaration gave it back.  A
+	// scope's map cannot do this by size: its order is by name, so trimming it
+	// would drop a name that was bound before the checkpoint - the category
+	// the source declared - and keep the speculative one.
+	while(bindings_.size() > mark.bindings)
 	{
-		map<string, int>& scope = scopes_.back();
-		while(scope.size() > mark.scope_size)
+		const Binding& entry = bindings_.back();
+		if(entry.scope < scopes_.size())
 		{
-			map<string, int>::iterator it = scope.end();
-			--it;
-			scope.erase(it);
+			map<string, int>& scope = scopes_[entry.scope];
+			if(entry.previous == kNameUnknown)
+			{
+				scope.erase(entry.name);
+			}
+			else
+			{
+				scope[entry.name] = entry.previous;
+			}
 		}
+		bindings_.pop_back();
 	}
 	while(classes_.size() > mark.classes)
 	{
@@ -454,16 +467,48 @@ void Parser::PopScope()
 {
 	if(scopes_.size() > 1)
 	{
+		DropBindings(scopes_.size() - 1);
 		scopes_.pop_back();
 	}
 }
 
+// Forgets the bindings of a scope that no longer exists: undoing them later
+// would reach into whatever scope took its place.
+void Parser::DropBindings(size_t scope)
+{
+	size_t keep = 0;
+	for(size_t index = 0; index < bindings_.size(); ++index)
+	{
+		if(bindings_[index].scope != scope)
+		{
+			if(keep != index)
+			{
+				bindings_[keep] = bindings_[index];
+			}
+			++keep;
+		}
+	}
+	bindings_.resize(keep);
+}
+
 void Parser::Bind(const string& name, int kind)
 {
-	if(!name.empty())
+	if(name.empty())
 	{
-		scopes_.back()[name] = kind;
+		return;
 	}
+	map<string, int>& scope = scopes_.back();
+	Binding entry;
+	entry.scope = scopes_.size() - 1;
+	entry.name = name;
+	entry.previous = kNameUnknown;
+	map<string, int>::const_iterator found = scope.find(name);
+	if(found != scope.end())
+	{
+		entry.previous = found->second;
+	}
+	bindings_.push_back(entry);
+	scope[name] = kind;
 }
 
 int Parser::Lookup(const string& name) const
@@ -1442,7 +1487,7 @@ int Parser::ClassSpecifier(bool require_semicolon)
 			const bool saved_rshift = rshift_split_;
 			const size_t saved_nodes = arena_.NodeCount();
 			const size_t saved_scopes = scopes_.size();
-			const size_t saved_scope_size = scopes_.back().size();
+			const size_t saved_bindings = bindings_.size();
 			const size_t saved_classes = classes_.size();
 			const int saved_angle = angle_depth_;
 			const int saved_delim = nested_delim_;
@@ -1466,11 +1511,12 @@ int Parser::ClassSpecifier(bool require_semicolon)
 			arena_.DropTo(saved_nodes);
 			while(scopes_.size() > saved_scopes)
 			{
+				DropBindings(scopes_.size() - 1);
 				scopes_.pop_back();
 			}
 			// The names the collecting pass bound stay bound: they are what it
-			// was run for.
-			(void)saved_scope_size;
+			// was run for, so its bindings leave the undo log here.
+			bindings_.resize(saved_bindings);
 			while(classes_.size() > saved_classes)
 			{
 				classes_.pop_back();
