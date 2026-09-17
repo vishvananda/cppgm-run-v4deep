@@ -34,18 +34,7 @@ namespace cppgm
 namespace preprocess
 {
 
-// The preprocessed tokens of a translation unit, one text-sequence token at a
-// time.  White space and the `##` operator's placemarkers are not reported:
-// neither survives phase 6, so neither reaches the post-token pass.
-class IPPTextSink
-{
-public:
-	virtual void EmitToken(const PPToken& token) = 0;
-
-	virtual ~IPPTextSink() {}
-};
-
-class Preprocessor : public IMacroBuiltins
+class Preprocessor : public IMacroBuiltins, public IPPTextSink
 {
 public:
 	// `build_date` and `build_time` are the `asctime` fields `__DATE__` and
@@ -59,6 +48,11 @@ public:
 
 	void ExpandBuiltinMacro(EPPBuiltinMacro which, const PPToken& head,
 	                        std::vector<PPToken>& out) override;
+
+	// The expander's side of the text-sequence interface: the placeholder
+	// records are dropped, a `_Pragma` operator is collected and run, and
+	// everything else is passed on to the consumer.
+	void EmitToken(const PPToken& token) override;
 
 private:
 	// One `#if` group in progress.
@@ -85,7 +79,7 @@ private:
 	void DefineBuiltin(const char* name, const char* body, EPPBuiltinMacro builtin);
 
 	void ProcessFile(const std::string& path);
-	void ProcessTokens(const std::vector<PPToken>& tokens);
+	void ProcessTokens(std::vector<PPToken>& tokens);
 	std::size_t HandleDirective(const std::vector<PPToken>& tokens, std::size_t hash);
 
 	void HandleConditional(const std::string& name, const std::vector<PPToken>& tokens,
@@ -96,9 +90,9 @@ private:
 	void HandleLine(const std::vector<PPToken>& tokens, std::size_t at, std::size_t end);
 	void HandlePragma(const std::vector<PPToken>& tokens, std::size_t at, std::size_t end);
 
-	void HandleTextSequence(const std::vector<PPToken>& tokens, std::size_t begin,
+	void HandleTextSequence(std::vector<PPToken>& tokens, std::size_t begin,
 	                        std::size_t end);
-	void ExecutePragmaOperators(std::vector<PPToken>& tokens);
+	void EmitPragmaToken(const PPToken& token);
 
 	// The tokens a `#if` or `#elif` line is evaluated from: the line's own
 	// tokens with `defined` and `__has_cpp_attribute` resolved, then macro
@@ -125,6 +119,9 @@ private:
 	void ApplyPragmaOnce();
 
 	IPPTextSink& sink_;
+	// The `_Pragma` operator being collected: `_Pragma` `(` string-literal `)`.
+	std::vector<PPToken> pragma_;
+	std::size_t pragma_step_;
 	MacroTable macros_;
 	MacroExpander expander_;
 
@@ -145,8 +142,6 @@ private:
 	std::vector<FileState> stack_;
 	std::set<PreprocessorFileId> pragma_once_;
 	std::vector<PPToken> line_;
-	std::vector<PPToken> sequence_;
-	std::vector<PPToken> expanded_;
 	std::vector<PPToken> prepared_;
 	unsigned long long counter_;
 	std::string build_date_;

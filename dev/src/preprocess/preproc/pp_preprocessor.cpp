@@ -216,6 +216,7 @@ bool DecodeOrdinaryStringLiteral(const std::string& spelling, std::string& out)
 Preprocessor::Preprocessor(IPPTextSink& sink, const std::string& build_date,
                            const std::string& build_time)
 	: sink_(sink)
+	, pragma_step_(0)
 	, expander_(macros_, *this)
 	, null_stream_(&null_buffer_)
 	, ctrl_sink_(null_stream_)
@@ -345,7 +346,7 @@ void Preprocessor::ProcessFile(const std::string& path)
 		throw PreprocessError("unterminated conditional inclusion");
 }
 
-void Preprocessor::ProcessTokens(const std::vector<PPToken>& tokens)
+void Preprocessor::ProcessTokens(std::vector<PPToken>& tokens)
 {
 	const std::size_t count = tokens.size();
 	std::size_t at = 0;
@@ -709,77 +710,70 @@ void Preprocessor::ExecutePragma(const std::string& text)
 		ApplyPragmaOnce();
 }
 
-void Preprocessor::HandleTextSequence(const std::vector<PPToken>& tokens, std::size_t begin,
+void Preprocessor::HandleTextSequence(std::vector<PPToken>& tokens, std::size_t begin,
                                       std::size_t end)
 {
 	if (begin >= end || !Active())
 		return;
 
-	sequence_.clear();
-	sequence_.reserve(end - begin);
+	// A new-line is white space once a text-sequence has been identified, and
+	// the directive scanner has already passed this region.
 	for (std::size_t at = begin; at < end; ++at)
 	{
-		PPToken token = tokens[at];
-		if (token.kind == kPPNewLine)
-			token.kind = kPPWhitespace;
-		sequence_.push_back(std::move(token));
+		if (tokens[at].kind == kPPNewLine)
+			tokens[at].kind = kPPWhitespace;
 	}
 
-	expanded_.clear();
-	expander_.Expand(sequence_, expanded_);
-	ExecutePragmaOperators(expanded_);
-
-	for (std::size_t at = 0; at < expanded_.size(); ++at)
-	{
-		const PPToken& token = expanded_[at];
-		if (IsWhitespaceKind(token.kind) || token.kind == kPPPlacemarker)
-			continue;
-		sink_.EmitToken(token);
-	}
+	expander_.ExpandToSink(tokens, begin, end, *this);
 }
 
-void Preprocessor::ExecutePragmaOperators(std::vector<PPToken>& tokens)
+void Preprocessor::EmitToken(const PPToken& token)
 {
-	std::size_t write = 0;
-	std::size_t at = 0;
-	const std::size_t count = tokens.size();
-	while (at < count)
+	if (pragma_step_ != 0)
 	{
-		const PPToken& token = tokens[at];
-		if (token.kind != kPPIdentifier || token.spelling != "_Pragma")
-		{
-			tokens[write] = token;
-			++write;
-			++at;
-			continue;
-		}
-
-		// `_Pragma ( string-literal )`, recognized only here, after every
-		// macro has been replaced, and removed once it has run.
-		std::size_t p = at + 1;
-		while (p < count && tokens[p].kind == kPPWhitespace)
-			++p;
-		if (p >= count || !PPTokenIsPunctuator(tokens[p], "("))
-			throw PreprocessError("malformed _Pragma operator");
-		++p;
-		while (p < count && tokens[p].kind == kPPWhitespace)
-			++p;
-		if (p >= count || tokens[p].kind != kPPStringLiteral)
-			throw PreprocessError("malformed _Pragma operator");
-		std::string text;
-		if (!DecodeOrdinaryStringLiteral(tokens[p].spelling, text))
-			throw PreprocessError("malformed _Pragma operator");
-		++p;
-		while (p < count && tokens[p].kind == kPPWhitespace)
-			++p;
-		if (p >= count || !PPTokenIsPunctuator(tokens[p], ")"))
-			throw PreprocessError("malformed _Pragma operator");
-		++p;
-
-		ExecutePragma(text);
-		at = p;
+		EmitPragmaToken(token);
+		return;
 	}
-	tokens.resize(write);
+	if (IsWhitespaceKind(token.kind) || token.kind == kPPPlacemarker)
+		return;
+	if (token.kind == kPPIdentifier && token.spelling == "_Pragma")
+	{
+		// `_Pragma ( string-literal )` is recognized only here, in a
+		// text-sequence and after every macro has been replaced, and the
+		// operator's tokens are removed once it has run.
+		pragma_step_ = 1;
+		return;
+	}
+	sink_.EmitToken(token);
+}
+
+void Preprocessor::EmitPragmaToken(const PPToken& token)
+{
+	if (IsWhitespaceKind(token.kind))
+		return;
+	if (pragma_step_ == 1)
+	{
+		if (!PPTokenIsPunctuator(token, "("))
+			throw PreprocessError("malformed _Pragma operator");
+		pragma_step_ = 2;
+		return;
+	}
+	if (pragma_step_ == 2)
+	{
+		std::string text;
+		if (token.kind != kPPStringLiteral ||
+		    !DecodeOrdinaryStringLiteral(token.spelling, text))
+		{
+			throw PreprocessError("malformed _Pragma operator");
+		}
+		pragma_.clear();
+		ExecutePragma(text);
+		pragma_step_ = 3;
+		return;
+	}
+	if (!PPTokenIsPunctuator(token, ")"))
+		throw PreprocessError("malformed _Pragma operator");
+	pragma_step_ = 0;
 }
 
 std::size_t Preprocessor::ResolveDefined(const std::vector<PPToken>& tokens, std::size_t at,
@@ -870,10 +864,10 @@ bool Preprocessor::EvaluateControllingExpression(const std::vector<PPToken>& tok
 		++p;
 	}
 
-	expanded_.clear();
-	expander_.Expand(prepared_, expanded_);
-	for (std::size_t index = 0; index < expanded_.size(); ++index)
-		FeedCtrlToken(ctrl_post_, expanded_[index]);
+	std::vector<PPToken> expanded;
+	expander_.Expand(prepared_, expanded);
+	for (std::size_t index = 0; index < expanded.size(); ++index)
+		FeedCtrlToken(ctrl_post_, expanded[index]);
 	ctrl_post_.FinishGroup();
 
 	CtrlExprValue value;

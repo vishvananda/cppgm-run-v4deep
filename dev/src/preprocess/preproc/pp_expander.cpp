@@ -11,6 +11,11 @@ namespace preprocess
 namespace
 {
 
+// How many finalized tokens are held before they are handed to the sink.  The
+// block is small enough that a folded sequence costs almost nothing and large
+// enough that the virtual call per token is not the texture of the run.
+const std::size_t kFlushTokens = 4096;
+
 PPToken Placemarker(const PPToken& head, const PPMacroPaint& paint)
 {
 	PPToken token;
@@ -121,6 +126,36 @@ void MacroExpander::Expand(const std::vector<PPToken>& input, std::vector<PPToke
 	frames_.pop_back();
 }
 
+void MacroExpander::ExpandToSink(std::vector<PPToken>& input, std::size_t begin,
+                                 std::size_t end, IPPTextSink& sink)
+{
+	frames_.push_back(Frame());
+	Frame& frame = frames_.back();
+	frame.sink = &sink;
+	frame.stack.reserve(end - begin);
+	// The stack holds the sequence in reverse, so the tokens are moved out of
+	// the source buffer rather than copied through it.
+	for (std::size_t at = end; at > begin; --at)
+		frame.stack.push_back(std::move(input[at - 1]));
+
+	Run(frame, chunk_);
+	FlushChunk(frame, chunk_);
+
+	frames_.pop_back();
+}
+
+void MacroExpander::FlushChunk(Frame& frame, std::vector<PPToken>& output)
+{
+	if (frame.sink == nullptr || output.empty())
+	{
+		output.clear();
+		return;
+	}
+	for (std::size_t index = 0; index < output.size(); ++index)
+		frame.sink->EmitToken(output[index]);
+	output.clear();
+}
+
 void MacroExpander::Run(Frame& frame, std::vector<PPToken>& output)
 {
 	std::vector<PPToken>& stack = frame.stack;
@@ -151,6 +186,8 @@ void MacroExpander::Run(Frame& frame, std::vector<PPToken>& output)
 		}
 		output.push_back(token);
 		stack.pop_back();
+		if (frame.sink != nullptr && output.size() >= kFlushTokens)
+			FlushChunk(frame, output);
 	}
 }
 

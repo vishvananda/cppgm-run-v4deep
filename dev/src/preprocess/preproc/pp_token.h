@@ -50,11 +50,18 @@ enum EPPTokenKind : std::uint8_t
 // One macro name a token may no longer expand, and the names behind it.  The
 // list is shared and never mutated, so `Add` is one allocation and a token
 // that was never painted carries a null pointer.
+//
+// `low` and `high` are the extremes of the names in the whole tail.  A name
+// outside them cannot be in the list at all, which answers the common case - a
+// long chain of helper macros, each with an identity outside its ancestors'
+// range - without walking it.
 struct PPMacroPaintNode
 {
 	std::shared_ptr<const PPMacroPaintNode> parent;
 	std::uint32_t id;
 	std::uint32_t size;
+	std::uint32_t low;
+	std::uint32_t high;
 };
 
 typedef std::shared_ptr<const PPMacroPaintNode> PPMacroPaint;
@@ -80,8 +87,10 @@ struct PPToken
 // usually the one most recently added, so the walk is short.
 inline bool PPTokenIsPainted(const PPToken& token, std::uint32_t id)
 {
-	for (const PPMacroPaintNode* node = token.paint.get(); node != nullptr;
-	     node = node->parent.get())
+	const PPMacroPaintNode* node = token.paint.get();
+	if (node == nullptr || id < node->low || id > node->high)
+		return false;
+	for (; node != nullptr; node = node->parent.get())
 	{
 		if (node->id == id)
 			return true;
@@ -97,6 +106,17 @@ PPMacroPaint PPMacroPaintAdd(const PPMacroPaint& paint, std::uint32_t id);
 // the invocation it is substituted into.  The shorter list is the one walked,
 // so the wide paint of a long expansion chain is not the one scanned.
 PPMacroPaint PPMacroPaintUnion(const PPMacroPaint& left, const PPMacroPaint& right);
+
+// Where a text-sequence's finalized tokens go.  The expander reports each
+// token as soon as nothing in the sequence can change it, so a translation
+// unit is never held as one owning token vector.
+class IPPTextSink
+{
+public:
+	virtual void EmitToken(const PPToken& token) = 0;
+
+	virtual ~IPPTextSink() {}
+};
 
 // True for the preprocessing-op-or-punc spelled `spelling`.
 inline bool PPTokenIsPunctuator(const PPToken& token, const char* spelling)

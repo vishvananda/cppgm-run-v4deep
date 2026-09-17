@@ -7,17 +7,22 @@ namespace preprocess
 
 PPMacroPaint PPMacroPaintAdd(const PPMacroPaint& paint, std::uint32_t id)
 {
-	for (const PPMacroPaintNode* node = paint.get(); node != nullptr;
-	     node = node->parent.get())
+	if (paint.get() != nullptr && id >= paint->low && id <= paint->high)
 	{
-		if (node->id == id)
-			return paint;
+		for (const PPMacroPaintNode* node = paint.get(); node != nullptr;
+		     node = node->parent.get())
+		{
+			if (node->id == id)
+				return paint;
+		}
 	}
 
 	std::shared_ptr<PPMacroPaintNode> grown(new PPMacroPaintNode);
 	grown->parent = paint;
 	grown->id = id;
 	grown->size = (paint ? paint->size : 0) + 1;
+	grown->low = paint ? (id < paint->low ? id : paint->low) : id;
+	grown->high = paint ? (id > paint->high ? id : paint->high) : id;
 	return grown;
 }
 

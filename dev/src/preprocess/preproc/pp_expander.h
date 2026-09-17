@@ -58,6 +58,14 @@ public:
 	// their capacity across the run.
 	void Expand(const std::vector<PPToken>& input, std::vector<PPToken>& output);
 
+	// Expands the text-sequence `input[begin, end)` and reports each token to
+	// `sink` as soon as it is final.  Nothing re-examines a token that has been
+	// reported - a rescan only ever moves forward - so the sequence is never
+	// held as one owning vector.  The tokens are consumed: the caller must not
+	// read them again.
+	void ExpandToSink(std::vector<PPToken>& input, std::size_t begin, std::size_t end,
+	                  IPPTextSink& sink);
+
 private:
 	// One argument of an invocation.  The expanded form and both painted forms
 	// are produced on demand, because most arguments are used one way only.
@@ -84,9 +92,17 @@ private:
 	{
 		std::vector<PPToken> stack;
 		std::vector<Argument> arguments;
+		// Set on the frame of a top-level text sequence: the reported tokens go
+		// here, a chunk at a time, instead of accumulating in the output vector.
+		IPPTextSink* sink;
+
+		Frame()
+			: sink(nullptr)
+		{}
 	};
 
 	void Run(Frame& frame, std::vector<PPToken>& output);
+	void FlushChunk(Frame& frame, std::vector<PPToken>& output);
 	void Invoke(Frame& frame, const PPMacro& macro, std::vector<PPToken>& output);
 	void CollectArguments(Frame& frame, const PPMacro& macro);
 	void Substitute(Frame& frame, const PPMacro& macro, const PPToken& head);
@@ -103,6 +119,10 @@ private:
 
 	MacroTable& macros_;
 	IMacroBuiltins& builtins_;
+	// The block a streamed text sequence is expanded into before it is handed
+	// over.  Keeping the capacity across sequences keeps the expansion free of
+	// per-token allocation.
+	std::vector<PPToken> chunk_;
 	std::deque<Frame> frames_;
 };
 
