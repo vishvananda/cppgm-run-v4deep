@@ -105,12 +105,14 @@ Committed benchmark, 3 000 groups, 923 664 B of source, a 6 922 324 B dump,
 
 | tool | latency (s) | peak RSS (MB) |
 | --- | --- | --- |
-| `cppgm++-ref` | 0.670 [0.662..0.690] | 48.2 [48.1..48.4] |
-| `cppgm++` | 0.438 [0.432..0.476] | 59.1 [59.1..59.2] |
+| `cppgm++-ref` | 0.661 [0.655..0.682] | 48.2 [48.2..48.4] |
+| `cppgm++` | 0.443 [0.430..0.645] | 59.1 [59.0..59.2] |
 
-A/A calibration on the same schedule: paired difference median +0.0027 s, MAD
-0.0075 s, range [-0.0228..+0.0116].  The -0.227 s latency difference is 30x the
-noise floor with 5 of 5 blocks negative, so it is a separable win.  Peak RSS is
+A/A calibration on the same schedule: paired difference median -0.0086 s, MAD
+0.0086 s, range [-0.0163..+0.0031].  The -0.214 s latency difference is 25x the
+noise floor with 5 of 5 blocks negative, so it is a separable win.  A second
+run of the same protocol before the last three fixes read 0.670 / 0.438 with an
+A/A MAD of 0.0075 s, so the reading is stable across builds.  Peak RSS is
 **not** a win: the tree is a node vector with a `std::vector<int>` child list
 per node, so the compiler holds 59.1 MB against the reference's 48.2 MB on this
 corpus, a 1.23x constant factor.  The identified fix (one arena-backed child
