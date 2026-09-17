@@ -982,7 +982,7 @@ int Parser::PrimaryExpression()
 		// A C-style cast is `( type-id ) unary-expression`; anything else is a
 		// parenthesized expression.  The cast attempt runs before the
 		// delimiter count changes, so every increment below is matched.
-		if(AtTypeSpecifierStart())
+		if(AtQualifiedTypeStart(0))
 		{
 			bool ok = false;
 			int type = kNoSyntaxNode;
