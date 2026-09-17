@@ -50,6 +50,7 @@ my @atoms = (
 	'\\u0041\\u0024', '\\u', '\\U', '\\U00110000', '\\u00A0',
 	"R\"delim(x)delim\"", 'R"a(b"c)a"', "R\"(a\nb)\"", 'uR"(a)"', 'UR"(a)"',
 	'"a"b', "'a'b", '"a"8', '"a"_', 'R"(a)"_',
+	"R\"(a\\\nb)\"", "R\"d(x)d\"", 'u8R"(x)y', "\\\nR\"(x)\"",
 	'??=', '????=', '??/', '?', '??', '???',
 	"\xC3\xA9", "\xCF\x80", "\xF0\x9F\x98\x80", "\xEF\xBB\xBF",
 	"\377", "\xC0\x80", "\xE2\x82",
@@ -90,11 +91,29 @@ sub run_tool
 	return ($exit, $data);
 }
 
+# Boundaries that the fixture suite does not pin, each one a place where two
+# readings of the grammar disagree.  They are always checked, before the random
+# inputs, so a regression is reported even when the seed changes.
+my @curated = (
+	"#include\"\"\n", "#include <>\n", "#include\"a\"\n", "#include < >\n",
+	"#include \"foo\n", "#include <foo\n", "#include\"\"x\n",
+	"\\u0041\n", "\\\\u0041\n", "\\\\\\u0041\n", "\\\\uD800\n",
+	"\"\\\\u0041\"\n", "\"\\uZZZZ\"\n", "'\\u0024'\n", "\\u0024\n",
+	"R\"a(x)aaa\"xxx)aa\"\n", "R\"(a\\\nb)\"\n", "R\"()\"\n", "R\"()\"_x\n",
+	"R\"abc\"\n", "R\"1234567890123456()\"\n", "R\"12345678901234567()\"\n",
+	"<::", "<::>", "<:::", "<::\n", "%:include <c>\n", "%:%:include <d>\n",
+	"a\\\n", "a\\\\\nb\n", "???=\n", "????=\n", "??/u0040\n", "??/\n",
+	"/*c*/\n", "/*\n*/a\n", "//x", "a", "", "\n", "\xff", "\xc0\x80",
+	"s<::t\n", "x<:3:>y\n", "\"a\"b\n", "\"a\"_w\n", "'a'_w\n",
+	"u8'x'\n", "u8\"x\"\n", "u8R\"(x)\"\n", "LR\"(x)\"\n", "uR\"(x)\"\n",
+);
+
 srand($seed);
 my $mismatches = 0;
-for my $iteration (1 .. $iterations)
+my @inputs = (@curated, map { make_input($_) } (1 .. $iterations));
+for my $iteration (1 .. scalar(@inputs))
 {
-	my $input = make_input($iteration);
+	my $input = $inputs[$iteration - 1];
 	my ($mine_exit, $mine_out) = run_tool($mine, $input);
 	my ($ref_exit, $ref_out) = run_tool($reference, $input);
 	# Failing-case stdout is informational; only the status must agree.
