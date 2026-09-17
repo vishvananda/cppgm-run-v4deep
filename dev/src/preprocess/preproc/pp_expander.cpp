@@ -480,6 +480,9 @@ void MacroExpander::Substitute(Frame& frame, const PPMacro& macro, const PPToken
 		head.substituted ? nullptr : head.paint, macro.id);
 	const PPMacroPaint argument_paint = paint_.Add(
 		head.substituted ? head.paint : nullptr, macro.id);
+	// The head's own chain, without the name this expansion adds to it.  It is
+	// what the one replacement part that is not painted whole inherits.
+	const PPMacroPaint bare_paint = head.substituted ? nullptr : head.paint;
 	const std::uint32_t variadic_index = static_cast<std::uint32_t>(macro.parameters.size());
 
 	// The parts in the order the definition wrote them, with every parameter
@@ -504,9 +507,31 @@ void MacroExpander::Substitute(Frame& frame, const PPMacro& macro, const PPToken
 		// barring the name would bar an invocation the substituted text is free
 		// to make.
 		const bool carries_paint =
-			!macro.function_like || part.kind != kPPBodyToken ||
-			!NamesFunctionLikeMacro(part.token) || OpensInvocationPart(macro, index + 1);
-		const PPMacroPaint own_paint = carries_paint ? self_paint : PPMacroPaint();
+			part.kind != kPPBodyToken || !NamesFunctionLikeMacro(part.token) ||
+			OpensInvocationPart(macro, index + 1);
+		// A function-like macro name the definition does not follow with a
+		// written `(` is not the head of an invocation this expansion made: the
+		// `(` that invokes it, if any, comes from the substituted text or from
+		// the tokens after the invocation.  Such a name keeps the head's own
+		// chain when the macro is function-like - its arguments surround it -
+		// and nothing from this expansion when the macro is object-like, whose
+		// replacement is re-examined in place.  It keeps the whole chain when it
+		// names this macro or a name the head was already unavailable for.
+		PPMacroPaint own_paint = self_paint;
+		if (!carries_paint)
+		{
+			const PPMacro* named = macros_.Find(part.token.spelling);
+			if (macro.function_like)
+			{
+				if (part.token.spelling != macro.name)
+					own_paint = bare_paint;
+			}
+			else if (!(named == &macro ||
+			           (head.paint != nullptr && PPTokenIsPainted(head, named->id))))
+			{
+				own_paint = nullptr;
+			}
+		}
 
 		// The GNU `, ## __VA_ARGS__`: an empty variable argument deletes the
 		// comma, a non-empty one keeps it and is not pasted onto.

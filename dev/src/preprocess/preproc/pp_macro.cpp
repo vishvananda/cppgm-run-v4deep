@@ -168,7 +168,11 @@ void BuildParts(PPMacro& macro)
 			continue;
 		}
 
-		if (PPTokenIsHashOperator(token))
+		// 16.3.2's `#` is an operator of a function-like macro's replacement
+		// list only.  In an object-like macro's list it is an ordinary
+		// preprocessing-token, which is what lets `#define h # ## #` be a
+		// definition at all: the two `#` are that operator's operands.
+		if (macro.function_like && PPTokenIsHashOperator(token))
 		{
 			const std::size_t next = NextSignificant(body, index + 1);
 			std::uint32_t parameter = 0;
@@ -183,21 +187,25 @@ void BuildParts(PPMacro& macro)
 				index = next;
 				continue;
 			}
-			if (next != kNoIndex && body[next].kind == kPPIdentifier)
-				throw PreprocessError("`#` is not followed by a macro parameter");
-			// A `#` next to a `##` is one of that operator's operands - the
-			// course's `# ## #` definition - and anything else is a rejection.
-			const std::size_t previous = PreviousSignificant(body, index);
-			const bool pasted =
-				(next != kNoIndex && PPTokenIsPasteOperator(body[next])) ||
-				(previous != kNoIndex && PPTokenIsPasteOperator(body[previous]));
-			if (!pasted)
-				throw PreprocessError("`#` is not followed by a macro parameter");
+			// 16.3.2 makes every `#` of a function-like macro's replacement
+			// list an operator, so one that does not stringize a parameter is
+			// a rejection - including the `#` of a written `# ## #`, which is
+			// only a definition because an object-like list has no such
+			// operator.
+			throw PreprocessError("`#` is not followed by a macro parameter");
 		}
 		else if (PPTokenIsPasteOperator(token))
 		{
-			if (PreviousSignificant(body, index) == kNoIndex)
+			// 16.3.3's operands are the tokens on either side, so a `##` at
+			// either end of the list or next to another `##` has no such pair.
+			const std::size_t previous = PreviousSignificant(body, index);
+			if (previous == kNoIndex)
 				throw PreprocessError("`##` cannot begin a macro replacement list");
+			if (PPTokenIsPasteOperator(body[previous]))
+				throw PreprocessError("`##` has no left operand");
+			const std::size_t next = NextSignificant(body, index + 1);
+			if (next != kNoIndex && PPTokenIsPasteOperator(body[next]))
+				throw PreprocessError("`##` has no right operand");
 		}
 		else if (token.kind == kPPIdentifier)
 		{
