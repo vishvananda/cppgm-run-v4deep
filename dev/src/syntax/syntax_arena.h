@@ -33,12 +33,22 @@ struct SyntaxNode
 	int label;
 	int first_child;  // edge index, or kNoSyntaxNode
 	int last_child;   // edge index, or kNoSyntaxNode
+	// The token range the node covers, and the literal facts a literal token
+	// carries.  Later stages need both: an anonymous type is named from the
+	// range it spans, and a constant expression reads a literal's value rather
+	// than re-parsing its spelling.
+	int start;
+	int end;
+	int literal;
 
 	SyntaxNode()
 		: tag(-1)
 		, label(-1)
 		, first_child(kNoSyntaxNode)
 		, last_child(kNoSyntaxNode)
+		, start(-1)
+		, end(-1)
+		, literal(-1)
 	{}
 };
 
@@ -109,6 +119,39 @@ public:
 	void PutTag(int node, const char* tag)
 	{
 		nodes_[static_cast<std::size_t>(node)].tag = Intern(tag);
+	}
+
+	// The token range a node covers.  `start` is set where the node is made;
+	// `end` is set where a production finishes a construct whose extent is only
+	// known at the end, such as a class or enum body.
+	void SetStart(int node, std::size_t position)
+	{
+		nodes_[static_cast<std::size_t>(node)].start = static_cast<int>(position);
+	}
+
+	void SetEnd(int node, std::size_t position)
+	{
+		nodes_[static_cast<std::size_t>(node)].end = static_cast<int>(position);
+	}
+
+	void SetLiteral(int node, int literal)
+	{
+		nodes_[static_cast<std::size_t>(node)].literal = literal;
+	}
+
+	int Start(int node) const
+	{
+		return nodes_[static_cast<std::size_t>(node)].start;
+	}
+
+	int End(int node) const
+	{
+		return nodes_[static_cast<std::size_t>(node)].end;
+	}
+
+	int Literal(int node) const
+	{
+		return nodes_[static_cast<std::size_t>(node)].literal;
 	}
 
 	void AddChild(int parent, int child);

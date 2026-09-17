@@ -195,9 +195,11 @@ private:
 	posttoken::PostTokenStream& post_;
 };
 
+}  // namespace
+
 // `__DATE__` and `__TIME__`, taken once so every source of the run sees the
 // same stamp.
-void BuildDateAndTime(string& date, string& time)
+void BuildStamp(string& date, string& time)
 {
 	const time_t now = ::time(nullptr);
 	const char* stamp = asctime(localtime(&now));
@@ -211,7 +213,24 @@ void BuildDateAndTime(string& date, string& time)
 	time.assign(stamp + 11, 8);
 }
 
-}  // namespace
+void ParseSource(const string& source, const string& build_date, const string& build_time,
+                 ParsedSource& out)
+{
+	SyntaxTokenSink sink(out.spellings);
+	posttoken::PostTokenStream tokens(sink);
+	PostTokenBridge bridge(tokens);
+	Preprocessor preprocessor(bridge, build_date, build_time);
+
+	preprocessor.ProcessPrimarySource(source);
+	tokens.emit_eof();
+
+	if(sink.invalid())
+	{
+		throw runtime_error("invalid preprocessing-token");
+	}
+	out.literals = sink.literals();
+	out.root = ParseTranslationUnit(sink.tokens(), out.spellings, out.arena);
+}
 
 void EmitAst(const vector<string>& sources, const string& outfile)
 {
@@ -223,30 +242,16 @@ void EmitAst(const vector<string>& sources, const string& outfile)
 
 	string build_date;
 	string build_time;
-	BuildDateAndTime(build_date, build_time);
+	BuildStamp(build_date, build_time);
 
 	out << sources.size() << " translation units\n";
 
 	for(size_t index = 0; index < sources.size(); ++index)
 	{
-		SyntaxSpellingPool spellings;
-		SyntaxTokenSink sink(spellings);
-		posttoken::PostTokenStream tokens(sink);
-		PostTokenBridge bridge(tokens);
-		Preprocessor preprocessor(bridge, build_date, build_time);
-
-		preprocessor.ProcessPrimarySource(sources[index]);
-		tokens.emit_eof();
-
-		if(sink.invalid())
-		{
-			throw runtime_error("invalid preprocessing-token");
-		}
-
+		ParsedSource parsed;
+		ParseSource(sources[index], build_date, build_time, parsed);
 		out << "start translation unit " << (index + 1) << '\n';
-		SyntaxArena arena;
-		const int root = ParseTranslationUnit(sink.tokens(), spellings, arena);
-		arena.Write(out, root);
+		parsed.arena.Write(out, parsed.root);
 		out << "end translation unit\n";
 	}
 	out.flush();

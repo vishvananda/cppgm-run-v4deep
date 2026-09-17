@@ -364,17 +364,23 @@ size_t Parser::EndPosition() const
 
 int Parser::Tag(const char* name)
 {
-	return arena_.Make(name);
+	const int node = arena_.Make(name);
+	arena_.SetStart(node, pos_);
+	return node;
 }
 
 int Parser::Named(const char* name, const string& label)
 {
-	return arena_.Make(name, label);
+	const int node = arena_.Make(name, label);
+	arena_.SetStart(node, pos_);
+	return node;
 }
 
 int Parser::Terminal(const char* name, const SyntaxToken& token)
 {
-	return arena_.Make(name, TokenLabel(token));
+	const int node = arena_.Make(name, TokenLabel(token));
+	arena_.SetStart(node, pos_);
+	return node;
 }
 
 void Parser::Add(int parent, int child)
@@ -992,6 +998,12 @@ int Parser::Declaration()
 		if(At(posttoken::KW_CLASS, cursor) || At(posttoken::KW_STRUCT, cursor))
 		{
 			++cursor;
+		}
+		// The name may be qualified - `enum class writer::state : int` - so a
+		// run of `name::` components precedes the last one.
+		while(At(kIdentifierToken, cursor) && At(posttoken::OP_COLON2, cursor + 1))
+		{
+			cursor += 2;
 		}
 		if(At(kIdentifierToken, cursor))
 		{
@@ -1658,10 +1670,14 @@ int Parser::ClassSpecifier(bool require_semicolon)
 		Expect(posttoken::OP_RBRACE, "`}`");
 		classes_.pop_back();
 	}
-	if(require_semicolon || At(posttoken::OP_SEMICOLON))
+	// The `;` belongs to the class-specifier's own production only where the
+	// specifier stands alone as a declaration; an embedded one leaves it to the
+	// declaration that wraps it, which is what the specifier's extent records.
+	if(require_semicolon)
 	{
 		Expect(posttoken::OP_SEMICOLON, "`;`");
 	}
+	arena_.SetEnd(node, pos_);
 	return node;
 }
 
@@ -1723,12 +1739,22 @@ int Parser::EnumSpecifier()
 		Advance();
 	}
 	SkipAttributes();
-	if(At(kIdentifierToken))
+	if(At(kIdentifierToken) || At(posttoken::OP_COLON2))
 	{
-		const string name = Spelling();
-		arena_.SetLabel(node, name);
-		Bind(name, kNameType);
-		Advance();
+		// A qualified name declares the last component in the scope it names.
+		const size_t start = Position();
+		bool present = false;
+		NestedNameSpecifier(present);
+		if(At(kIdentifierToken))
+		{
+			const string name = Spelling();
+			Advance();
+			arena_.SetLabel(node, RangeText(start));
+			if(!name.empty())
+			{
+				Bind(name, kNameType);
+			}
+		}
 	}
 	if(Accept(posttoken::OP_COLON))
 	{
@@ -1736,6 +1762,9 @@ int Parser::EnumSpecifier()
 	}
 	if(Accept(posttoken::OP_LBRACE))
 	{
+		// An empty enumerator list has no child to mark it, so the body is
+		// recorded where a later stage can tell `enum E { }` from `enum E;`.
+		arena_.SetLiteral(node, 1);
 		while(!At(posttoken::OP_RBRACE) && !AtEof())
 		{
 			if(Accept(posttoken::OP_COMMA))
@@ -1754,6 +1783,7 @@ int Parser::EnumSpecifier()
 		}
 		Expect(posttoken::OP_RBRACE, "`}`");
 	}
+	arena_.SetEnd(node, pos_);
 	return node;
 }
 

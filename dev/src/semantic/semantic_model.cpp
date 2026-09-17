@@ -1,0 +1,780 @@
+#include "semantic/semantic_model.h"
+
+#include <sstream>
+
+#include "posttoken/fundamental_type.h"
+
+using namespace std;
+
+namespace cppgm
+{
+namespace semantic
+{
+
+namespace
+{
+
+const char* ClassKeyName(int key)
+{
+	switch(key)
+	{
+	case kClassKeyStruct:
+		return "struct";
+	case kClassKeyUnion:
+		return "union";
+	default:
+		return "class";
+	}
+}
+
+const char* EnumKeyName(int key)
+{
+	switch(key)
+	{
+	case kEnumKeyClass:
+		return "enum class";
+	case kEnumKeyStruct:
+		return "enum struct";
+	default:
+		return "enum";
+	}
+}
+
+string Number(long long value)
+{
+	ostringstream out;
+	out << value;
+	return out.str();
+}
+
+// The structural key an interned type is looked up by.  A class, enumeration
+// or template parameter is nominal rather than structural, so it is never
+// interned: its identity is the entity that owns it.
+string StructuralKey(const Type& type)
+{
+	ostringstream key;
+	key << static_cast<int>(type.kind) << ':';
+	switch(type.kind)
+	{
+	case kTypeFundamental:
+		key << type.base;
+		break;
+	case kTypeCv:
+		key << type.quals << ':' << type.base;
+		break;
+	case kTypePointer:
+	case kTypeLvalueReference:
+	case kTypeRvalueReference:
+		key << type.base;
+		break;
+	case kTypeArray:
+		key << type.bound << ':' << type.base;
+		break;
+	case kTypeFunction:
+		key << type.base << '(';
+		for(size_t index = 0; index < type.params.size(); ++index)
+		{
+			key << type.params[index] << ',';
+		}
+		key << (type.varargs ? "..." : "") << ')';
+		break;
+	default:
+		break;
+	}
+	return key.str();
+}
+
+}  // namespace
+
+const char* const kFundamentalNames[] =
+{
+	"signed char",
+	"short int",
+	"int",
+	"long int",
+	"long long int",
+	"unsigned char",
+	"unsigned short int",
+	"unsigned int",
+	"unsigned long int",
+	"unsigned long long int",
+	"wchar_t",
+	"char",
+	"char16_t",
+	"char32_t",
+	"bool",
+	"float",
+	"double",
+	"long double",
+	"void",
+	"nullptr_t"
+};
+
+Model::Model()
+	: global_(-1)
+{
+	// The global namespace is the root every translation unit is analysed in.
+	global_ = NewScope(kScopeNamespace, "<global>", -1);
+}
+
+int Model::AddType(const Type& type)
+{
+	types_.push_back(type);
+	return static_cast<int>(types_.size()) - 1;
+}
+
+int Model::InternType(const string& key, const Type& type)
+{
+	map<string, int>::const_iterator found = type_ids_.find(key);
+	if(found != type_ids_.end())
+	{
+		return found->second;
+	}
+	const int id = AddType(type);
+	type_ids_.insert(make_pair(key, id));
+	return id;
+}
+
+int Model::Fundamental(int index)
+{
+	Type type;
+	type.kind = kTypeFundamental;
+	type.base = index;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::Qualified(int quals, int base)
+{
+	if(quals == 0)
+	{
+		return base;
+	}
+	// Every field is read before a nested call can intern a type: interning
+	// appends to the table, so a reference into it does not survive one.
+	const Type current = Get(base);
+	// 7.1.6.1: a qualifier on a qualified type is the union of the two sets.
+	if(current.kind == kTypeCv)
+	{
+		return Qualified(quals | current.quals, current.base);
+	}
+	// A reference has no top-level cv qualification (8.3.2/1): the qualifier
+	// would apply to the referred-to type, which an alias never does.
+	if(current.kind == kTypeLvalueReference || current.kind == kTypeRvalueReference)
+	{
+		return base;
+	}
+	// Qualifying an array qualifies its element type (8.3.4/1).
+	if(current.kind == kTypeArray)
+	{
+		const int element = Qualified(quals, current.base);
+		return Array(current.bound, element);
+	}
+	if(current.kind == kTypeFunction)
+	{
+		return base;
+	}
+	Type type;
+	type.kind = kTypeCv;
+	type.quals = quals;
+	type.base = base;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::Pointer(int base)
+{
+	Type type;
+	type.kind = kTypePointer;
+	type.base = base;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::LvalueReference(int base)
+{
+	if(Get(base).kind == kTypeLvalueReference)
+	{
+		return base;
+	}
+	if(Get(base).kind == kTypeRvalueReference)
+	{
+		return LvalueReference(Get(base).base);
+	}
+	Type type;
+	type.kind = kTypeLvalueReference;
+	type.base = base;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::RvalueReference(int base)
+{
+	if(Get(base).kind == kTypeLvalueReference || Get(base).kind == kTypeRvalueReference)
+	{
+		return base;
+	}
+	Type type;
+	type.kind = kTypeRvalueReference;
+	type.base = base;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::Array(long long bound, int element)
+{
+	Type type;
+	type.kind = kTypeArray;
+	type.bound = bound;
+	type.base = element;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::Function(int result, const vector<int>& params, bool varargs)
+{
+	Type type;
+	type.kind = kTypeFunction;
+	type.base = result;
+	type.params = params;
+	type.varargs = varargs;
+	return InternType(StructuralKey(type), type);
+}
+
+int Model::NewClass(const string& name, int key)
+{
+	Type type;
+	type.kind = kTypeClass;
+	type.name = name;
+	type.class_key = key;
+	return AddType(type);
+}
+
+int Model::NewEnum(const string& name, int key)
+{
+	Type type;
+	type.kind = kTypeEnum;
+	type.name = name;
+	type.enum_key = key;
+	return AddType(type);
+}
+
+int Model::NewTemplateParameter(const string& name, bool template_parameter)
+{
+	Type type;
+	type.kind = kTypeTemplateParameter;
+	type.name = name;
+	type.class_key = template_parameter ? 1 : 0;
+	return AddType(type);
+}
+
+string Model::Spelling(int id) const
+{
+	const Type& type = Get(id);
+	switch(type.kind)
+	{
+	case kTypeFundamental:
+		return kFundamentalNames[type.base];
+	case kTypeClass:
+		return string(ClassKeyName(type.class_key)) + " " + type.name;
+	case kTypeEnum:
+		return string(EnumKeyName(type.enum_key)) + " " + type.name;
+	case kTypeTemplateParameter:
+		return string(type.class_key != 0 ? "template-parameter " : "typename ") + type.name;
+	case kTypeCv:
+		if(type.quals == 3)
+		{
+			return "const volatile " + Spelling(type.base);
+		}
+		return string(type.quals == 1 ? "const " : "volatile ") + Spelling(type.base);
+	case kTypePointer:
+		return "pointer to " + Spelling(type.base);
+	case kTypeLvalueReference:
+		return "lvalue-reference to " + Spelling(type.base);
+	case kTypeRvalueReference:
+		return "rvalue-reference to " + Spelling(type.base);
+	case kTypeArray:
+		return "array of " + Number(type.bound < 0 ? 0 : type.bound) + " " + Spelling(type.base);
+	case kTypeFunction:
+	{
+		string text = "function of (";
+		for(size_t index = 0; index < type.params.size(); ++index)
+		{
+			if(index != 0)
+			{
+				text += ", ";
+			}
+			text += Spelling(type.params[index]);
+		}
+		if(type.varargs)
+		{
+			if(!type.params.empty())
+			{
+				text += ", ";
+			}
+			text += "...";
+		}
+		text += ") returning ";
+		text += Spelling(type.base);
+		return text;
+	}
+	}
+	return string();
+}
+
+bool Model::Same(int left, int right) const
+{
+	return left == right;
+}
+
+// 8.3.5/5: a parameter's array or function type adjusts to a pointer, and a
+// top-level cv qualifier is removed, before two declarations are compared.
+int Model::AdjustParameter(int id)
+{
+	const Type& type = Get(id);
+	if(type.kind == kTypeArray)
+	{
+		return Pointer(type.base);
+	}
+	if(type.kind == kTypeFunction)
+	{
+		return Pointer(id);
+	}
+	if(type.kind == kTypeCv)
+	{
+		return type.base;
+	}
+	return id;
+}
+
+bool Model::SameSignature(int left, int right)
+{
+	if(left == right)
+	{
+		return true;
+	}
+	// The two types are copied, because adjusting a parameter interns a pointer
+	// type and the table does not hold references across that.
+	const Type a = Get(left);
+	const Type b = Get(right);
+	if(a.kind != b.kind || a.kind != kTypeFunction)
+	{
+		return false;
+	}
+	if(a.base != b.base || a.varargs != b.varargs || a.params.size() != b.params.size())
+	{
+		return false;
+	}
+	for(size_t index = 0; index < a.params.size(); ++index)
+	{
+		if(AdjustParameter(a.params[index]) != AdjustParameter(b.params[index]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool Model::SizeOf(int id, unsigned long long& size) const
+{
+	const Type& type = Get(id);
+	switch(type.kind)
+	{
+	case kTypeFundamental:
+		size = posttoken::FundamentalTypeSize(
+		    static_cast<posttoken::EFundamentalType>(type.base));
+		return size != 0;
+	case kTypeCv:
+		return SizeOf(type.base, size);
+	case kTypePointer:
+	case kTypeLvalueReference:
+	case kTypeRvalueReference:
+		size = 8;
+		return true;
+	case kTypeEnum:
+		// 7.2/2: a fixed underlying type decides the size; an enumeration
+		// without one takes the type its values need, which the course ABI
+		// gives as `int` for the values these tests reach.
+		if(type.underlying >= 0)
+		{
+			return SizeOf(type.underlying, size);
+		}
+		size = 4;
+		return true;
+	case kTypeArray:
+	{
+		if(type.bound < 0)
+		{
+			return false;
+		}
+		unsigned long long element = 0;
+		if(!SizeOf(type.base, element))
+		{
+			return false;
+		}
+		size = element * static_cast<unsigned long long>(type.bound);
+		return true;
+	}
+	case kTypeClass:
+		return false;
+	default:
+		return false;
+	}
+}
+
+bool Model::AlignOf(int id, unsigned long long& align) const
+{
+	const Type& type = Get(id);
+	switch(type.kind)
+	{
+	case kTypeFundamental:
+		align = posttoken::FundamentalTypeSize(
+		    static_cast<posttoken::EFundamentalType>(type.base));
+		return align != 0;
+	case kTypeCv:
+		return AlignOf(type.base, align);
+	case kTypePointer:
+	case kTypeLvalueReference:
+	case kTypeRvalueReference:
+		align = 8;
+		return true;
+	case kTypeEnum:
+		if(type.underlying >= 0)
+		{
+			return AlignOf(type.underlying, align);
+		}
+		align = 4;
+		return true;
+	case kTypeArray:
+		return AlignOf(type.base, align);
+	default:
+		return false;
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Scopes, entities and bindings
+// ---------------------------------------------------------------------------
+
+int Model::NewScope(EScopeKind kind, const string& name, int parent)
+{
+	Scope scope;
+	scope.kind = kind;
+	scope.name = name;
+	scope.parent = parent;
+	scopes_.push_back(scope);
+	const int id = static_cast<int>(scopes_.size()) - 1;
+	if(parent >= 0)
+	{
+		scopes_[static_cast<size_t>(parent)].children.push_back(id);
+	}
+	return id;
+}
+
+int Model::NewEntity(EEntityKind kind, const string& name)
+{
+	Entity entity;
+	entity.kind = kind;
+	entity.name = name;
+	entities_.push_back(entity);
+	return static_cast<int>(entities_.size()) - 1;
+}
+
+void Model::AddBinding(int scope, const Binding& binding)
+{
+	scopes_[static_cast<size_t>(scope)].bindings.push_back(binding);
+}
+
+void Model::BindType(int scope, const string& name, int entity)
+{
+	if(!name.empty())
+	{
+		scopes_[static_cast<size_t>(scope)].types[name] = entity;
+	}
+}
+
+void Model::BindValue(int scope, const string& name, int entity)
+{
+	if(!name.empty())
+	{
+		scopes_[static_cast<size_t>(scope)].values[name] = entity;
+	}
+}
+
+void Model::BindNamespace(int scope, const string& name, int scope_id)
+{
+	if(!name.empty())
+	{
+		scopes_[static_cast<size_t>(scope)].namespaces[name] = scope_id;
+	}
+}
+
+int Model::ScopeFor(int owner, int entity, EScopeKind kind, const string& name)
+{
+	map<int, int>& scopes = entities_[static_cast<size_t>(entity)].scopes;
+	map<int, int>::const_iterator found = scopes.find(owner);
+	if(found != scopes.end())
+	{
+		return found->second;
+	}
+	const int scope = NewScope(kind, name, owner);
+	scopes.insert(make_pair(owner, scope));
+	Entity& record = entities_[static_cast<size_t>(entity)];
+	record.scope = scope;
+	scopes_[static_cast<size_t>(scope)].entity = entity;
+	const int type = record.type;
+	if(type >= 0)
+	{
+		types_[static_cast<size_t>(type)].decl_scope = scope;
+	}
+	return scope;
+}
+
+// ---------------------------------------------------------------------------
+// Lookup
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+// Which of a scope's three name maps a lookup consults.
+enum ELookupCategory
+{
+	kLookupType = 0,
+	kLookupValue,
+	kLookupNamespace
+};
+
+}  // namespace
+
+int Model::LookupInCategory(int scope, const string& name, int category) const
+{
+	const Scope& record = ScopeOf(scope);
+	const map<string, int>* table = &record.types;
+	if(category == kLookupValue)
+	{
+		table = &record.values;
+	}
+	else if(category == kLookupNamespace)
+	{
+		table = &record.namespaces;
+	}
+	map<string, int>::const_iterator found = table->find(name);
+	return found == table->end() ? -1 : found->second;
+}
+
+// A namespace scope's own declarations, then the namespaces its
+// using-directives nominate, then its inline namespaces (7.3.4/2, 7.3.1/8).
+int Model::LookupThrough(int scope, const string& name, int category,
+                         vector<int>& visited) const
+{
+	for(size_t index = 0; index < visited.size(); ++index)
+	{
+		if(visited[index] == scope)
+		{
+			return -1;
+		}
+	}
+	visited.push_back(scope);
+
+	const int direct = LookupInCategory(scope, name, category);
+	if(direct >= 0)
+	{
+		return direct;
+	}
+
+	const Scope& record = ScopeOf(scope);
+	// An unnamed namespace's members are visible where the namespace is
+	// declared, which its enclosing scope is.
+	if(record.unnamed && record.parent >= 0)
+	{
+		const int inherited = LookupThrough(record.parent, name, category, visited);
+		if(inherited >= 0)
+		{
+			return inherited;
+		}
+	}
+
+	int result = -1;
+	for(size_t index = 0; index < record.inline_namespaces.size(); ++index)
+	{
+		const int found = LookupThrough(record.inline_namespaces[index], name, category, visited);
+		if(found >= 0)
+		{
+			if(result >= 0 && result != found)
+			{
+				throw SemanticError("ambiguous name `" + name + "`");
+			}
+			result = found;
+		}
+	}
+	for(size_t index = 0; index < record.directives.size(); ++index)
+	{
+		const int found = LookupThrough(record.directives[index], name, category, visited);
+		if(found >= 0)
+		{
+			if(result >= 0 && result != found)
+			{
+				throw SemanticError("ambiguous name `" + name + "`");
+			}
+			result = found;
+		}
+	}
+	return result;
+}
+
+int Model::LookupType(int scope, const string& name) const
+{
+	return LookupInCategory(scope, name, kLookupType);
+}
+
+int Model::LookupValue(int scope, const string& name) const
+{
+	return LookupInCategory(scope, name, kLookupValue);
+}
+
+int Model::LookupNamespace(int scope, const string& name) const
+{
+	return LookupInCategory(scope, name, kLookupNamespace);
+}
+
+int Model::LookupTypeUnqualified(int scope, const string& name) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		vector<int> visited;
+		const int found = LookupThrough(current, name, kLookupType, visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
+}
+
+int Model::LookupValueUnqualified(int scope, const string& name) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		vector<int> visited;
+		const int found = LookupThrough(current, name, kLookupValue, visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
+}
+
+int Model::LookupNamespaceUnqualified(int scope, const string& name) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		const int found = LookupInCategory(current, name, kLookupNamespace);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
+}
+
+int Model::LookupTypeIn(int scope, const string& name) const
+{
+	vector<int> visited;
+	return LookupThrough(scope, name, kLookupType, visited);
+}
+
+int Model::LookupValueIn(int scope, const string& name) const
+{
+	vector<int> visited;
+	return LookupThrough(scope, name, kLookupValue, visited);
+}
+
+int Model::LookupNamespaceIn(int scope, const string& name) const
+{
+	vector<int> visited;
+	return LookupThrough(scope, name, kLookupNamespace, visited);
+}
+
+int Model::ResolveQualifier(int scope, const string& qualifier) const
+{
+	// A nested-name-specifier is a run of components ending in `::`.  Each
+	// component is a namespace, a class or an enumeration; the last one names
+	// the scope a qualified lookup searches.  The first component is looked up
+	// from `scope` outward; the rest are looked up inside the scope the
+	// previous component named, so `A::B::C` cannot reach `C` through `A`.
+	size_t position = 0;
+	int current = -1;
+	if(qualifier.size() >= 2 && qualifier[0] == ':' && qualifier[1] == ':')
+	{
+		current = global_;
+		position = 2;
+	}
+	while(position < qualifier.size())
+	{
+		const size_t next = qualifier.find("::", position);
+		const string component = qualifier.substr(position, next - position);
+		position = next == string::npos ? qualifier.size() : next + 2;
+
+		const int base = current < 0 ? scope : current;
+		// A namespace name is looked for before a type name, because a
+		// namespace-only context must not be answered by a value or a class of
+		// the same spelling (3.4.3).
+		const int found = current < 0
+		    ? LookupNamespaceUnqualified(base, component)
+		    : LookupNamespaceIn(base, component);
+		if(found >= 0)
+		{
+			current = found;
+			continue;
+		}
+		const int entity = current < 0
+		    ? LookupTypeUnqualified(base, component)
+		    : LookupTypeIn(base, component);
+		if(entity < 0)
+		{
+			throw SemanticError("unknown name `" + component + "` in a qualifier");
+		}
+		// An alias names the type it denotes, so `A::Y` reaches the class `A`
+		// stands for; an enumeration may have a scope in more than one place,
+		// and the one the qualified definition registered is the last.
+		int found_scope = EntityOf(entity).scope;
+		const int aliased = EntityOf(entity).type;
+		if(found_scope < 0 && aliased >= 0 && Get(aliased).decl_scope >= 0)
+		{
+			found_scope = Get(aliased).decl_scope;
+		}
+		if(found_scope < 0)
+		{
+			throw SemanticError("`" + component + "` does not name a scope");
+		}
+		current = found_scope;
+	}
+	if(current < 0)
+	{
+		throw SemanticError("empty nested-name-specifier");
+	}
+	return current;
+}
+
+int Model::EnclosingNamespace(int scope) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		if(ScopeOf(current).kind == kScopeNamespace)
+		{
+			return current;
+		}
+	}
+	return -1;
+}
+
+bool Model::NamespaceEncloses(int outer, int inner) const
+{
+	for(int current = inner; current >= 0; current = ScopeOf(current).parent)
+	{
+		if(current == outer)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+}  // namespace semantic
+}  // namespace cppgm

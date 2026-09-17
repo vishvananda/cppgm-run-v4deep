@@ -961,6 +961,9 @@ int Parser::PrimaryExpression()
 	if(kind == kLiteralToken)
 	{
 		const int node = Named("literal", Spelling());
+		// The token's decoded facts travel with the node, so a constant
+		// expression reads a value rather than re-parsing the spelling.
+		arena_.SetLiteral(node, TokenAt().literal);
 		Advance();
 		return node;
 	}
