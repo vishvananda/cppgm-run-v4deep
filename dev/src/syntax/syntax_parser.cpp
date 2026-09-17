@@ -2603,7 +2603,8 @@ void Parser::TemplateArgument()
 		try
 		{
 			TypeId();
-			ok = At(posttoken::OP_COMMA) || At(posttoken::OP_GT) || At(posttoken::OP_RSHIFT);
+			ok = At(posttoken::OP_COMMA) || At(posttoken::OP_GT) || At(posttoken::OP_RSHIFT) ||
+			     At(posttoken::OP_DOTS);
 		}
 		catch(const SyntaxError&)
 		{
@@ -2611,11 +2612,14 @@ void Parser::TemplateArgument()
 		}
 		if(ok)
 		{
+			// A pack expansion argument keeps the `...` its operand wrote.
+			Accept(posttoken::OP_DOTS);
 			return;
 		}
 		Rollback(mark);
 	}
 	AssignmentExpression();
+	Accept(posttoken::OP_DOTS);
 }
 
 // ---------------------------------------------------------------------------
