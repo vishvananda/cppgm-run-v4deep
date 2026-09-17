@@ -48,6 +48,7 @@ my @declarations = (
 	[ 'using N::T;', 'T' ],
 	[ 'using namespace N;', 'N' ],
 	[ 'int arr[V];', 'arr' ],
+	[ 'int cond[1 ? 2 : 3];', '1 ? 2 : 3' ],
 	[ 'extern int incomplete[];', 'incomplete' ],
 );
 
@@ -67,6 +68,8 @@ my @uses = (
 	[ 'int laid_out[sizeof(C)];', 'sizeof(C)' ],
 	[ 'int laid_out_align[alignof(C)];', 'alignof(C)' ],
 	[ 'C::D nested;', 'C::D' ],
+	[ 'int object_size[sizeof(arr)];', 'sizeof(arr)' ],
+	[ 'int wide_conditional[1 ? 2 : 3];', '1 ? 2 : 3' ],
 	[ 'decltype(V) d;', 'decltype(V)' ],
 	[ 'static_assert(V == 3, "v");', 'V' ],
 	[ 'static_assert(sizeof(S) == 1, "s");', 'sizeof(S)' ],

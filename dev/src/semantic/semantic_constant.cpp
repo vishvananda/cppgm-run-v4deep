@@ -508,6 +508,16 @@ Constant Analyzer::Evaluate(int node, int scope)
 	{
 		return EvaluateBinary(node, scope, AfterColon(Label(node)));
 	}
+	if(tag == "conditional-expression")
+	{
+		// 5.16: only the branch the condition selects is evaluated.
+		const Constant condition = Evaluate(ChildAt(node, 0), scope);
+		if(!condition.valid)
+		{
+			return result;
+		}
+		return Evaluate(ChildAt(node, condition.value != 0 ? 1 : 2), scope);
+	}
 	if(tag == "unary-expression")
 	{
 		return EvaluateUnary(node, scope, AfterColon(Label(node)));
@@ -541,11 +551,26 @@ Constant Analyzer::Evaluate(int node, int scope)
 	if(tag == "sizeof-expression" || tag == "type-trait-expression")
 	{
 		const int operand = ChildAt(node, 0);
-		if(operand < 0 || Tag(operand) != "type-id")
+		if(operand < 0)
 		{
 			return result;
 		}
-		const int target = BuildDeclarator(operand, -1, scope);
+		int target = -1;
+		if(Tag(operand) == "type-id")
+		{
+			target = BuildDeclarator(operand, -1, scope);
+		}
+		else if(Tag(operand) == "id-expression")
+		{
+			// `sizeof(x)` where `x` names an object is the type-forming case
+			// with an id-expression operand, which 5.3.3/1 allows.
+			const int entity = ResolveValueName(scope, Label(operand));
+			target = entity < 0 ? -1 : model_.EntityOf(entity).type;
+		}
+		if(target < 0)
+		{
+			return result;
+		}
 		unsigned long long amount = 0;
 		const bool align = AfterColon(Label(node)) == "alignof";
 		const bool known = align ? model_.AlignOf(target, amount) : model_.SizeOf(target, amount);

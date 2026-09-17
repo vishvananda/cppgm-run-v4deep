@@ -53,10 +53,11 @@ file bytes -> TranslatedSource -> PPTokenizer -> PPTokenReader
   where it is declared, which is what the reference does for
   `void f(T x) { } typedef char T;`.
 - `semantic_constant.cpp` is the integral constant subset of 5.19 the handout
-  requires.  `&&` and `||` do not evaluate the operand they do not select, so
-  `1 || (1 / 0)` is a constant; signed arithmetic that overflows is reported
-  rather than wrapped; a scoped enumeration compares only with the same
-  enumeration (7.2/9).
+  requires.  `&&`, `||` and `?:` do not evaluate the operand they do not
+  select, so `1 || (1 / 0)` is a constant; signed arithmetic that overflows is
+  reported rather than wrapped; a scoped enumeration compares only with the
+  same enumeration (7.2/9); `sizeof` and `alignof` take a type-id or the
+  id-expression of an object (5.3.3/1).
 - `semantic_dump.cpp` prints a scope's declarations in source order and then
   its child scopes, one line per declaration.  A `type` line prints the class
   or enum key its own declaration wrote with the name it bound, while a type
@@ -145,7 +146,7 @@ added, so there is no compiler-work budget to justify and none is claimed.
 - `student.tests/types_differential.pl` - 34 curated reduced reproducers of the
   scope, lookup, declarator, layout and rejection corners agree with the
   reference in exit status and dump.
-- `student.tests/types_sweep.pl` - 665 generated crossings of the declaration
+- `student.tests/types_sweep.pl` - 760 generated crossings of the declaration
   shapes this stage owns agree with the reference in exit status and dump.
   Before the fix it found five differences: the four readings now recorded in
   the ledger and the class-call scope below.
