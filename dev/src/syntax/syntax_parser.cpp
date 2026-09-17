@@ -637,9 +637,10 @@ bool Parser::CanStartDeclSpecifier() const
 	if(kind == kIdentifierToken)
 	{
 		// A name begins a decl-specifier-seq wherever only a declaration can
-		// appear; inside a block, where an expression statement is also
-		// possible, the category decides.
-		return declaration_only_ > 0 || IsTypeName(Spelling());
+		// appear; a qualified name has no other reading; inside a block an
+		// unqualified one is decided by its category.
+		return declaration_only_ > 0 || IsTypeName(Spelling()) ||
+		       At(posttoken::OP_COLON2, 1);
 	}
 	return false;
 }
@@ -730,7 +731,10 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		}
 		if(kind == kIdentifierToken)
 		{
-			if(saw_type || (declaration_only_ == 0 && !IsTypeName(Spelling())))
+			// A name followed by `::` is a qualified name, and a declaration
+			// is the only reading of one; a plain name needs a category.
+			if(saw_type || (!At(posttoken::OP_COLON2, 1) && declaration_only_ == 0 &&
+			                !IsTypeName(Spelling())))
 			{
 				// Once the sequence has a type specifier, a name begins the
 				// declarator: `typedef int FILE` declares `FILE`.
