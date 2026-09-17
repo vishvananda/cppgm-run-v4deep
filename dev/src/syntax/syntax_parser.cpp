@@ -992,6 +992,12 @@ int Parser::DeclarationBody(bool allow_function_definition)
 		throw SyntaxError("expected declaration at token " + to_string(pos_) + " (`" +
 		                  Spelling() + "`)");
 	}
+	if(!saw_type)
+	{
+		// A declaration needs a type; a run of storage specifiers alone begins
+		// a special member, as in `virtual ~C();`.
+		throw SyntaxError("declaration without a type");
+	}
 
 	if(allow_function_definition)
 	{
@@ -1668,6 +1674,7 @@ int Parser::MemberSpecifiers()
 		}
 		Add(node, Terminal("specifier", Current()));
 		Advance();
+		SkipAttributes();
 	}
 	return node;
 }
@@ -1681,14 +1688,15 @@ bool Parser::StartsSpecialMember()
 		return false;
 	}
 	const Mark mark = Take();
+	SkipAttributes();
 	while(IsMemberFunctionSpecifierKind(KindAt()))
 	{
 		Advance();
+		SkipAttributes();
 	}
 	bool ok = false;
 	if(!AtEof())
 	{
-		SkipAttributes();
 		const Mark name_mark = Take();
 		try
 		{
@@ -1778,6 +1786,7 @@ int Parser::SpecialMemberName()
 int Parser::SpecialMember()
 {
 	const Mark mark = Take();
+	SkipAttributes();
 	const int specs = MemberSpecifiers();
 	SkipAttributes();
 	const size_t name_start = Position();
