@@ -211,6 +211,7 @@ private:
 	int PostfixSuffixes(int node);
 	int PrimaryExpression();
 	int ArgumentList();
+	int PackExpansionClause();
 	int ParenArgumentList();
 	int BracedInitList();
 	int LambdaExpression();

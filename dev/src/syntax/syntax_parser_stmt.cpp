@@ -744,7 +744,7 @@ int Parser::NewInitializer()
 		{
 			for(;;)
 			{
-				Add(paren, AssignmentExpression());
+				Add(paren, PackExpansionClause());
 				if(!Accept(posttoken::OP_COMMA))
 				{
 					break;
@@ -869,14 +869,7 @@ int Parser::ParenArgumentList()
 	{
 		for(;;)
 		{
-			if(At(posttoken::OP_LBRACE))
-			{
-				Add(node, BracedInitList());
-			}
-			else
-			{
-				Add(node, AssignmentExpression());
-			}
+			Add(node, PackExpansionClause());
 			if(!Accept(posttoken::OP_COMMA))
 			{
 				break;
@@ -885,6 +878,21 @@ int Parser::ParenArgumentList()
 	}
 	Expect(posttoken::OP_RPAREN, "`)`");
 	--nested_delim_;
+	return node;
+}
+
+// One argument or initializer clause, wrapped in a `pack-expansion-expression`
+// when the source writes a `...` after it.
+int Parser::PackExpansionClause()
+{
+	const int clause = At(posttoken::OP_LBRACE) ? BracedInitList() : AssignmentExpression();
+	if(!At(posttoken::OP_DOTS))
+	{
+		return clause;
+	}
+	const int node = Tag("pack-expansion-expression");
+	Add(node, clause);
+	Advance();
 	return node;
 }
 
@@ -897,14 +905,7 @@ int Parser::ArgumentList()
 	{
 		for(;;)
 		{
-			if(At(posttoken::OP_LBRACE))
-			{
-				Add(node, BracedInitList());
-			}
-			else
-			{
-				Add(node, AssignmentExpression());
-			}
+			Add(node, PackExpansionClause());
 			if(!Accept(posttoken::OP_COMMA))
 			{
 				break;
