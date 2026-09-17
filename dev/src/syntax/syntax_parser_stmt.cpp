@@ -149,10 +149,15 @@ int Parser::CompoundStatement()
 	const int node = Tag("compound-statement");
 	Expect(posttoken::OP_LBRACE, "`{`");
 	PushScope();
+	// A block is the one place an expression statement is possible, so the
+	// name categories decide the block-item choice here again.
+	const int outer = declaration_only_;
+	declaration_only_ = 0;
 	while(!At(posttoken::OP_RBRACE) && !AtEof())
 	{
 		Add(node, Statement());
 	}
+	declaration_only_ = outer;
 	PopScope();
 	Expect(posttoken::OP_RBRACE, "`}`");
 	return node;
@@ -397,10 +402,12 @@ int Parser::Condition()
 		}
 		if(ok)
 		{
-			const int node = Tag("condition-declaration");
-			Add(node, specifiers);
-			Add(node, declarator);
-			Add(node, Initializer());
+			const int node = Tag("condition");
+			const int declaration = Tag("condition-declaration");
+			Add(declaration, specifiers);
+			Add(declaration, declarator);
+			Add(declaration, Initializer());
+			Add(node, declaration);
 			return node;
 		}
 		Rollback(inner);

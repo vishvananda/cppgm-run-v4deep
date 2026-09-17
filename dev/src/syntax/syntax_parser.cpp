@@ -277,6 +277,7 @@ Parser::Parser(const vector<SyntaxToken>& tokens, SyntaxArena& arena)
 	, rshift_split_(false)
 	, angle_depth_(0)
 	, nested_delim_(0)
+	, declaration_only_(1)
 {
 	scopes_.push_back(map<string, int>());
 }
@@ -380,16 +381,6 @@ string Parser::JoinedText(size_t first, size_t last) const
 			text += ' ';
 		}
 		text += spelling;
-	}
-	return text;
-}
-
-string Parser::JoinedRaw(size_t first, size_t last) const
-{
-	string text;
-	for(size_t index = first; index < last && index < tokens_.size(); ++index)
-	{
-		text += tokens_[index].spelling;
 	}
 	return text;
 }
@@ -637,7 +628,10 @@ bool Parser::CanStartDeclSpecifier() const
 	}
 	if(kind == kIdentifierToken)
 	{
-		return IsTypeName(Spelling());
+		// A name begins a decl-specifier-seq wherever only a declaration can
+		// appear; inside a block, where an expression statement is also
+		// possible, the category decides.
+		return declaration_only_ > 0 || IsTypeName(Spelling());
 	}
 	return false;
 }
@@ -698,7 +692,7 @@ int Parser::DeclSpecifierSeq(bool& saw_type, bool& saw_typedef)
 		}
 		if(kind == kIdentifierToken)
 		{
-			if(saw_type || !IsTypeName(Spelling()))
+			if(saw_type || (declaration_only_ == 0 && !IsTypeName(Spelling())))
 			{
 				// Once the sequence has a type specifier, a name begins the
 				// declarator: `typedef int FILE` declares `FILE`.
@@ -966,10 +960,12 @@ int Parser::NamespaceDefinition()
 	}
 	Expect(posttoken::OP_LBRACE, "`{`");
 	PushScope();
+	++declaration_only_;
 	while(!At(posttoken::OP_RBRACE) && !AtEof())
 	{
 		Add(node, Declaration());
 	}
+	--declaration_only_;
 	PopScope();
 	Expect(posttoken::OP_RBRACE, "`}`");
 	return node;
@@ -1252,11 +1248,13 @@ int Parser::ClassSpecifier()
 	{
 		PushScope();
 		classes_.push_back(name);
+		++declaration_only_;
 		Advance();
 		while(!At(posttoken::OP_RBRACE) && !AtEof())
 		{
 			Add(node, ClassMember());
 		}
+		--declaration_only_;
 		Expect(posttoken::OP_RBRACE, "`}`");
 		classes_.pop_back();
 		PopScope();
@@ -1731,7 +1729,19 @@ int Parser::Declarator()
 	}
 	else
 	{
+		// A parameter pack marker belongs to the declarator, on whichever side
+		// of the name it was written.
+		if(At(posttoken::OP_DOTS))
+		{
+			Add(node, Named("parameter-pack", "..."));
+			Advance();
+		}
 		Add(node, DeclaratorId());
+		if(At(posttoken::OP_DOTS))
+		{
+			Add(node, Named("parameter-pack", "..."));
+			Advance();
+		}
 	}
 	for(;;)
 	{
@@ -1952,15 +1962,17 @@ int Parser::ParameterDeclaration()
 		throw SyntaxError("expected a parameter declaration");
 	}
 	Add(node, specifiers);
-	if(At(posttoken::OP_DOTS))
-	{
-		Add(node, Named("parameter-pack", "..."));
-		Advance();
-	}
 	const int declarator = ParameterLikeDeclarator();
 	if(declarator != kNoSyntaxNode)
 	{
 		Add(node, declarator);
+	}
+	// The pack marker written after the type but before the name, as in
+	// `Args... args`, has no declarator to sit in.
+	if(At(posttoken::OP_DOTS))
+	{
+		Add(node, Named("parameter-pack", "..."));
+		Advance();
 	}
 	if(At(posttoken::OP_ASS))
 	{
@@ -2456,7 +2468,7 @@ int Parser::UnqualifiedId(const char* tag)
 		{
 			const size_t type_start = Position();
 			ConversionTypeId();
-			name += JoinedRaw(type_start, EndPosition());
+			name += JoinedText(type_start, EndPosition());
 			return Named(tag, name);
 		}
 		if(IsOperatorTokenKind(KindAt()))
@@ -2464,7 +2476,7 @@ int Parser::UnqualifiedId(const char* tag)
 			Advance();
 			if(At(posttoken::OP_LT) && TryTemplateIdTail())
 			{
-				return Named(tag, JoinedRaw(start, EndPosition()));
+				return Named(tag, JoinedText(start, EndPosition()));
 			}
 			return Named(tag, name + TextAt(start + 1));
 		}
@@ -2476,7 +2488,7 @@ int Parser::UnqualifiedId(const char* tag)
 		if(At(posttoken::KW_DECLTYPE))
 		{
 			DecltypeSpecifier();
-			return Named(tag, JoinedRaw(start, EndPosition()));
+			return Named(tag, JoinedText(start, EndPosition()));
 		}
 		const string name = Spelling();
 		Expect(kIdentifierToken, "a class name");
@@ -2491,7 +2503,7 @@ int Parser::UnqualifiedId(const char* tag)
 			Advance();
 			if(TryTemplateIdTail())
 			{
-				return Named(tag, JoinedRaw(start, EndPosition()));
+				return Named(tag, JoinedText(start, EndPosition()));
 			}
 			Rollback(mark);
 		}

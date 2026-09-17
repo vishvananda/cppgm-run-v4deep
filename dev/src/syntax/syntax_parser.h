@@ -67,7 +67,6 @@ private:
 	std::size_t EndPosition() const;
 
 	std::string JoinedText(std::size_t first, std::size_t last) const;
-	std::string JoinedRaw(std::size_t first, std::size_t last) const;
 
 	// --- rollback -------------------------------------------------------
 	struct Mark
@@ -240,6 +239,8 @@ private:
 	// has to bind it.
 	std::string declarator_name_;
 	bool declarator_is_function_;
+	// Nonzero where only a declaration can appear.
+	int declaration_only_;
 };
 
 // Parses one translation unit's tokens and returns the root node, throwing
