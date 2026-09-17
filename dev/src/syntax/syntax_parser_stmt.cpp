@@ -890,9 +890,9 @@ int Parser::PrimaryExpression()
 	{
 		const Mark mark = Take();
 		Advance();
-		++nested_delim_;
 		// A C-style cast is `( type-id ) unary-expression`; anything else is a
-		// parenthesized expression.
+		// parenthesized expression.  The cast attempt runs before the
+		// delimiter count changes, so every increment below is matched.
 		if(AtTypeSpecifierStart())
 		{
 			bool ok = false;
@@ -910,6 +910,7 @@ int Parser::PrimaryExpression()
 			{
 				const Mark after = Take();
 				Advance();
+				++nested_delim_;
 				bool cast = false;
 				try
 				{
@@ -920,6 +921,7 @@ int Parser::PrimaryExpression()
 				{
 					cast = false;
 				}
+				--nested_delim_;
 				Rollback(after);
 				if(cast)
 				{
@@ -927,7 +929,6 @@ int Parser::PrimaryExpression()
 					Add(node, type);
 					Expect(posttoken::OP_RPAREN, "`)`");
 					Add(node, UnaryExpression());
-					--nested_delim_;
 					return node;
 				}
 			}
