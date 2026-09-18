@@ -310,6 +310,45 @@ SRC
 template<class T> void take(const T*);
 void use() { const int* p = 0; take(p); }
 SRC
+	'a-use-sees-only-the-declarations-before-it' => [ '3.3.1 makes a declaration visible from its own point', <<'SRC' ],
+void use() { take(1); }
+void take(int);
+SRC
+	'a-later-overload-does-not-answer-an-earlier-call' => [ '3.3.1 keeps a later declaration out of the set', <<'SRC' ],
+int pick(int);
+void use() { pick(1); }
+long pick(long);
+SRC
+	'a-later-declaration-does-not-hide-an-outer-one' => [ '3.3.1 leaves the outer name visible where the inner one is not yet', <<'SRC' ],
+int value();
+void use() { value(); int value; }
+SRC
+	'a-qualifier-written-later-is-not-visible' => [ '3.3.1 reaches a nested-name-specifier only once it is declared', <<'SRC' ],
+void use() { n::target(); }
+namespace n { void target(); }
+SRC
+	'an-initializer-sees-only-what-precedes-it' => [ '3.3.1 puts the initializer after its own declarator', <<'SRC' ],
+int amount = sizeof(other);
+int other;
+SRC
+	'a-using-declaration-binds-from-where-it-is-written' => [ '7.3.3/2 makes the name visible from the declaration', <<'SRC' ],
+namespace n { int target(); }
+void use() { target(); }
+using n::target;
+SRC
+	'a-using-directive-nominates-from-where-it-is-written' => [ '7.3.4/2 with 3.3.1 nominates from the directive', <<'SRC' ],
+namespace n { int target(); }
+void use() { target(); }
+using namespace n;
+SRC
+	'a-parameter-is-visible-throughout-its-body' => [ '3.3.3/1 binds a parameter before the body', <<'SRC' ],
+int f(int value) { return value; }
+SRC
+	'a-template-declared-later-does-not-answer-an-earlier-call' => [ '3.3.1 with 14.1/2 leaves the later declaration out', <<'SRC' ],
+template<class T> void take(T);
+void use() { take(1); }
+void take(int);
+SRC
 );
 
 sub run_tool

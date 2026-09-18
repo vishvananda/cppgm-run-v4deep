@@ -91,7 +91,7 @@ bool Analyzer::FindFunctionTemplates(int scope, const string& name,
 	SplitQualifiedName(name, qualifier, plain);
 	if(!qualifier.empty())
 	{
-		const int target = model_.ResolveQualifier(scope, qualifier);
+		const int target = model_.ResolveQualifier(scope, qualifier, visible_limit_);
 		for(size_t index = 0; index < templates_.size(); ++index)
 		{
 			if(templates_[index].scope == target && templates_[index].name == plain)
@@ -325,8 +325,9 @@ int Analyzer::ResolveTemplateArgument(int scope, const string& text)
 	string name;
 	SplitQualifiedName(trimmed, qualifier, name);
 	const int entity = qualifier.empty()
-	    ? model_.LookupTypeUnqualified(scope, name)
-	    : model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier), name);
+	    ? model_.LookupTypeUnqualified(scope, name, visible_limit_)
+	    : model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier, visible_limit_),
+	                          name, visible_limit_);
 	if(entity >= 0)
 	{
 		return model_.EntityOf(entity).type;

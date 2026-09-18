@@ -188,6 +188,9 @@ struct Binding
 	// An enumerator's value.
 	long long value;
 
+	// 3.3.1: the source position this declaration became visible at.
+	long long point;
+
 	Binding()
 		: kind(kBindingVariable)
 		, type(-1)
@@ -195,6 +198,7 @@ struct Binding
 		, class_key(-1)
 		, enum_key(-1)
 		, value(0)
+		, point(-1)
 	{}
 };
 
@@ -239,6 +243,25 @@ struct Entity
 	{}
 };
 
+// One name a scope binds, with the point of declaration that made it visible
+// (N3485 3.3.1): the source position of the declaration that bound it.  A name
+// declared after a use does not answer that use, so a lookup carrying a
+// position sees only the names bound before it.
+struct ScopeName
+{
+	// The entity or scope the name denotes.
+	int id;
+
+	// The source position the binding became visible at, or -1 when the
+	// declaration has no recorded position, which is always visible.
+	long long point;
+
+	ScopeName()
+		: id(-1)
+		, point(-1)
+	{}
+};
+
 struct Scope
 {
 	EScopeKind kind;
@@ -261,13 +284,28 @@ struct Scope
 	// Lookup: the last entity each spelling denotes in this scope, kept apart
 	// by category so a namespace-only context is not hidden by a value name
 	// (N3485 3.4.3).
-	std::map<std::string, int> types;
-	std::map<std::string, int> values;
-	std::map<std::string, int> namespaces;
+	std::map<std::string, ScopeName> types;
+	std::map<std::string, ScopeName> values;
+	std::map<std::string, ScopeName> namespaces;
 
-	// Namespaces nominated by using-directives, and the inline child
+	// A namespace a using-directive nominates.  The nomination takes effect at
+	// the directive itself (7.3.4/2 with 3.3.1), so it carries its own point of
+	// declaration: a name reached through a directive written after the use is
+	// not visible to it.
+	struct Directive
+	{
+		int scope;
+		long long point;
+
+		Directive()
+			: scope(-1)
+			, point(-1)
+		{}
+	};
+
+	// The namespaces nominated by using-directives, and the inline child
 	// namespaces a qualified or unqualified lookup also searches.
-	std::vector<int> directives;
+	std::vector<Directive> directives;
 	std::vector<int> inline_namespaces;
 
 	// The names this scope bound with a namespace-alias-definition.  An alias
@@ -410,11 +448,32 @@ public:
 	// denotes for lookup.
 	void AddBinding(int scope, const Binding& binding);
 
+	// 3.3.1: whether a declaration made at `point` answers a use at `limit`.  A
+	// negative limit carries no position and sees every declaration, and an
+	// unrecorded point is always visible.
+	static bool Visible(long long point, long long limit)
+	{
+		return limit < 0 || point < 0 || point < limit;
+	}
+
 	// Registers a class, enumeration or namespace entity under its name in
 	// `scope`, so a later declaration finds the same entity.
 	void BindType(int scope, const std::string& name, int entity);
 	void BindValue(int scope, const std::string& name, int entity);
 	void BindNamespace(int scope, const std::string& name, int scope_id);
+
+	// The position of the declaration being analysed, which every binding made
+	// while it is current records as its point of declaration (3.3.1).  The
+	// analysis walks in source order, so this is the position at which the
+	// names it binds become visible.
+	void SetPoint(long long point)
+	{
+		point_ = point;
+	}
+
+	// Records that a using-directive in `scope` nominates `target`, in effect
+	// from the position of the directive being analysed.
+	void AddDirective(int scope, int target);
 
 	// The scope a class or enumeration uses in `owner`, creating and
 	// registering one when the entity has none there yet.
@@ -423,32 +482,45 @@ public:
 	// --- lookup -----------------------------------------------------------
 	// The entity a spelling denotes, or -1.  `kind` selects the category, so a
 	// namespace-only lookup is not answered by a value of the same spelling.
-	int LookupType(int scope, const std::string& name) const;
-	int LookupValue(int scope, const std::string& name) const;
-	int LookupNamespace(int scope, const std::string& name) const;
+	//
+	// `limit` is the point of declaration a use carries (3.3.1): a name bound
+	// at or after it does not answer the lookup, and a negative limit means the
+	// caller carries no position and sees every name the scope binds.  The
+	// analysis itself passes none, because it walks in source order; the PA7
+	// walk passes the position of the use it is resolving.
+	int LookupType(int scope, const std::string& name, long long limit = -1) const;
+	int LookupValue(int scope, const std::string& name, long long limit = -1) const;
+	int LookupNamespace(int scope, const std::string& name, long long limit = -1) const;
 
 	// The same lookups starting at `scope` and following using-directives and
 	// inline namespaces.  A name found through two nominated namespaces that
 	// denote different entities is ambiguous and rejected (3.4.1).
-	int LookupTypeUnqualified(int scope, const std::string& name) const;
-	int LookupValueUnqualified(int scope, const std::string& name) const;
-	int LookupNamespaceUnqualified(int scope, const std::string& name) const;
+	int LookupTypeUnqualified(int scope, const std::string& name,
+	                          long long limit = -1) const;
+	int LookupValueUnqualified(int scope, const std::string& name,
+	                           long long limit = -1) const;
+	int LookupNamespaceUnqualified(int scope, const std::string& name,
+	                               long long limit = -1) const;
 
 	// The first component of a nested-name-specifier.  3.4.3.1/1 with 7.3.4/3:
 	// the names a using-directive nominates are considered only where the
 	// enclosing scopes declare nothing of that spelling, so the nearest
 	// enclosing declaration wins.
-	int LookupTypeQualifier(int scope, const std::string& name) const;
-	int LookupNamespaceQualifier(int scope, const std::string& name) const;
+	int LookupTypeQualifier(int scope, const std::string& name,
+	                        long long limit = -1) const;
+	int LookupNamespaceQualifier(int scope, const std::string& name,
+	                             long long limit = -1) const;
 
 	// Qualified lookup: `scope` is the scope named by the qualifier.
-	int LookupTypeIn(int scope, const std::string& name) const;
-	int LookupValueIn(int scope, const std::string& name) const;
-	int LookupNamespaceIn(int scope, const std::string& name) const;
+	int LookupTypeIn(int scope, const std::string& name, long long limit = -1) const;
+	int LookupValueIn(int scope, const std::string& name, long long limit = -1) const;
+	int LookupNamespaceIn(int scope, const std::string& name,
+	                      long long limit = -1) const;
 
 	// Resolves a name written with a nested-name-specifier to the scope it
 	// names, starting from `scope`.
-	int ResolveQualifier(int scope, const std::string& qualifier) const;
+	int ResolveQualifier(int scope, const std::string& qualifier,
+	                     long long limit = -1) const;
 
 	// The nearest enclosing namespace scope of `scope`, which is what the
 	// qualified-definition rule of 7.3.1.2/2 compares.
@@ -539,12 +611,18 @@ private:
 	int InternType(const std::string& key, const Type& type) const;
 	int AddType(const Type& type) const;
 	void CollectNominations(int scope, std::vector<int>& out) const;
-	int LookupInCategory(int scope, const std::string& name, int category) const;
+	int LookupInCategory(int scope, const std::string& name, int category,
+	                     long long limit) const;
 	int LookupThrough(int scope, const std::string& name, int category,
-	                  std::vector<int>& visited) const;
+	                  long long limit, std::vector<int>& visited) const;
 	int LookupThroughDirect(int scope, const std::string& name, int category,
-	                        std::vector<int>& visited) const;
+	                        long long limit, std::vector<int>& visited) const;
 
+	// Binds `name` to `id` in `scope`'s table for `category`, recording the
+	// declaration's own position as the name's point of declaration.
+	void Bind(int scope, const std::string& name, int id, int category);
+
+	long long point_;
 	mutable std::vector<Type> types_;
 	mutable std::map<std::string, int> type_ids_;
 	std::vector<Scope> scopes_;

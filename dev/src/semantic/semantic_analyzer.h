@@ -330,6 +330,34 @@ private:
 	int SemForInit(int node, int scope);
 
 	// --- expressions ------------------------------------------------------
+	// A name resolution that carries the position of the construct it reads.
+	// The enclosing position is restored on exit, so a resolution that carries
+	// none of its own is not narrowed by a neighbouring expression.
+	struct LimitScope
+	{
+		LimitScope(Analyzer& analyzer, int node)
+			: analyzer_(analyzer)
+			, saved_(analyzer.visible_limit_)
+		{
+			const int start = analyzer.visibility_open_ || node < 0
+			    ? -1
+			    : analyzer.arena_.Start(node);
+			analyzer.visible_limit_ = start;
+		}
+
+		~LimitScope()
+		{
+			analyzer_.visible_limit_ = saved_;
+		}
+
+	private:
+		LimitScope(const LimitScope&) = delete;
+		LimitScope& operator=(const LimitScope&) = delete;
+
+		Analyzer& analyzer_;
+		long long saved_;
+	};
+
 	Resolved SemExpr(int node, int scope, int target = -1);
 	Resolved SemLiteral(int node, int scope);
 	Resolved SemKeywordLiteral(int node, int scope);
@@ -472,6 +500,19 @@ private:
 	bool return_is_void_;
 	int loop_depth_;
 	int switch_depth_;
+
+	// 3.3.1: the point of declaration the walk is resolving names at.  The PA7
+	// walk reads a tree the analysis already finished, so a scope holds names
+	// declared after the use it is answering; carrying the use's own position is
+	// what keeps those out.  A negative limit carries no position and sees every
+	// name, which is how the analysis itself looks names up and how a deferred
+	// member body is read: the reference resolves one after the whole unit, so
+	// every name the unit declares is already visible to it.
+	long long visible_limit_;
+
+	// Whether the walk is inside a body the analysis deferred, where the limit
+	// is deliberately open.
+	bool visibility_open_;
 
 	// The object an anonymous union's storage has, keyed by the union's type,
 	// so a name the union injected reaches the member through it (9.5/3).

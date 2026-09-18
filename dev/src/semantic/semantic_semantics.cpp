@@ -35,13 +35,6 @@ string OperatorWord(const string& label)
 	return AfterColon(label);
 }
 
-string Number(long long value)
-{
-	ostringstream out;
-	out << value;
-	return out.str();
-}
-
 }  // namespace
 
 void Analyzer::BuildSemantics(int root)
@@ -503,7 +496,11 @@ void Analyzer::SemanticsImplicitBodies()
 {
 	// A member body written inside its class is a complete-class context, so
 	// the analysis read it after the member list; the dump prints it after the
-	// unit's own declarations, which is where the reference puts it.
+	// unit's own declarations, which is where the reference puts it.  The
+	// reference resolves such a body after the whole unit, where every name the
+	// unit declares is already visible (3.3.7/1), so the walk carries no point
+	// of declaration here.
+	visibility_open_ = true;
 	for(size_t index = 0; index < deferred_bodies_.size(); ++index)
 	{
 		const Model::DeclarationFact* fact =
@@ -534,6 +531,7 @@ void Analyzer::SemanticsImplicitBodies()
 		sem_.AddChild(definition, body);
 		sem_.AddChild(sem_root_, definition);
 	}
+	visibility_open_ = false;
 }
 
 int Analyzer::SemFunctionDefinition(int node, int scope, int declarator, int body)
@@ -603,10 +601,6 @@ int Analyzer::SemFunctionDefinition(int node, int scope, int declarator, int bod
 	return_type_ = model_.Get(fact->type).base;
 	return_is_void_ = model_.Get(return_type_).kind == kTypeFundamental &&
 	                  model_.Get(return_type_).base == posttoken::FT_VOID;
-	if(body < 0)
-	{
-		return definition;
-	}
 	const int built = SemCompoundStatement(body, model_.ScopeAt(body));
 	sem_.AddChild(definition, built);
 	return definition;

@@ -29,6 +29,13 @@
 # mask a result.  The range is still printed so an excursion larger than the
 # measured effect stays visible.
 #
+# The reference arm runs the reference *binary*, not the `*-ref` wrapper the
+# correctness harnesses invoke it through: that wrapper starts a Perl process
+# to check the binaries before exec'ing the compiler, which adds a fixed
+# quarter-second to every run and would be timed as if it were the reference
+# compiler's own latency.  The binaries are ensured once, before any block, so
+# both arms time a compiler and nothing else.
+#
 # `cppgm++ --emit-semantics` has no executable output, so only compiler
 # latency, peak RSS and the size of the dump are reported; there is no
 # generated-program runtime or text size at this stage, and no telemetry
@@ -55,9 +62,14 @@ my $corpus = "$outdir/semantics_bench.t";
 my $tsv = "$outdir/semantics_benchmark.tsv";
 
 my $mine = "$root/dev/cppgm++";
-my $ref = "$root/pa7/cppgm++-ref";
+my $ref = "$root/reference-binaries/cppgm++";
 
 make_path($outdir);
+
+# The reference binaries are checked and materialised once, before the first
+# timed run, so no block pays for the check.
+system("perl", "$root/scripts/ensure_reference_binaries.pl", "cppgm++") == 0
+	or die "cannot ensure the reference binaries\n";
 
 sub generate
 {

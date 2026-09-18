@@ -11,7 +11,6 @@
 #include "semantic/semantic_analyzer.h"
 
 #include <cstdlib>
-#include <cstring>
 #include <limits>
 #include <sstream>
 
@@ -40,23 +39,6 @@ string OperatorWord(const string& label)
 	return AfterColon(label);
 }
 
-int DigitValue(char c)
-{
-	if(c >= '0' && c <= '9')
-	{
-		return c - '0';
-	}
-	if(c >= 'a' && c <= 'f')
-	{
-		return c - 'a' + 10;
-	}
-	if(c >= 'A' && c <= 'F')
-	{
-		return c - 'A' + 10;
-	}
-	return -1;
-}
-
 // The word a terminal label spells when it carries its token kind, as
 // `KW_DOUBLE:double` does.
 string KeywordWord(const string& label)
@@ -77,12 +59,6 @@ bool IsSimpleTypeWord(const string& word)
 	       word == "char16_t" || word == "char32_t" || word == "int" || word == "short" ||
 	       word == "long" || word == "signed" || word == "unsigned" || word == "float" ||
 	       word == "double";
-}
-
-bool EndsWith(const string& text, const char* suffix)
-{
-	const size_t length = strlen(suffix);
-	return text.size() >= length && text.compare(text.size() - length, length, suffix) == 0;
 }
 
 }  // namespace
@@ -343,10 +319,8 @@ int Analyzer::ClassOfPointer(int type) const
 	{
 		return -1;
 	}
-	int cv = 0;
 	if(model_.Get(base).kind == kTypeCv)
 	{
-		cv = model_.Get(base).quals;
 		base = model_.Get(base).base;
 	}
 	return model_.Get(base).kind == kTypeClass ? base : -1;
@@ -946,46 +920,62 @@ void Analyzer::CollectFrom(int scope, const string& name, vector<Candidate>& out
 	visited.push_back(scope);
 	const Scope& record = model_.ScopeOf(scope);
 
-	const map<string, int>::const_iterator direct = record.values.find(name);
+	// 3.3.1: a declaration that follows the use does not answer it.  The
+	// bindings are in source order, so the visible ones are a prefix of them and
+	// the scope's answer is the last one that precedes the use.  A name declared
+	// here only later does not answer at all, and the enclosing scopes do.
+	const map<string, ScopeName>::const_iterator direct = record.values.find(name);
 	if(direct != record.values.end())
 	{
-		const Entity& entity = model_.EntityOf(direct->second);
-		if(entity.kind != kEntityFunction)
-		{
-			blocked = true;
-			return;
-		}
+		int answer = -1;
 		for(size_t index = 0; index < record.bindings.size(); ++index)
 		{
 			const Binding& binding = record.bindings[index];
-			if(binding.kind == kBindingFunction && binding.name == name)
+			if(binding.name != name)
 			{
-				// 13.1/3: two declarations with one signature and one return
-				// type are one function, not two candidates.
-				bool seen = false;
-				for(size_t existing = 0; existing < out.size(); ++existing)
-				{
-					// 13.1/3: two declarations of one signature are one
-					// function, so the candidate set holds it once.
-					seen = seen || (out[existing].type == binding.type) ||
-					       (model_.SameSignature(out[existing].type, binding.type) &&
-					        model_.SameFunctionType(out[existing].type, binding.type));
-				}
-				if(seen)
-				{
-					continue;
-				}
-				Candidate candidate;
-				candidate.entity = binding.entity;
-				candidate.type = binding.type;
-				candidate.scope = scope;
-				out.push_back(candidate);
+				continue;
 			}
+			if(!Model::Visible(binding.point, visible_limit_))
+			{
+				break;
+			}
+			answer = static_cast<int>(index);
+			if(binding.kind != kBindingFunction)
+			{
+				continue;
+			}
+			// 13.1/3: two declarations with one signature and one return
+			// type are one function, not two candidates.
+			bool seen = false;
+			for(size_t existing = 0; existing < out.size(); ++existing)
+			{
+				// 13.1/3: two declarations of one signature are one
+				// function, so the candidate set holds it once.
+				seen = seen || (out[existing].type == binding.type) ||
+				       (model_.SameSignature(out[existing].type, binding.type) &&
+				        model_.SameFunctionType(out[existing].type, binding.type));
+			}
+			if(seen)
+			{
+				continue;
+			}
+			Candidate candidate;
+			candidate.entity = binding.entity;
+			candidate.type = binding.type;
+			candidate.scope = scope;
+			out.push_back(candidate);
 		}
-		// A using-declaration copies the target's binding into this scope, so a
-		// name bound here that denotes a function elsewhere is still this
-		// scope's answer.
-		return;
+		if(answer >= 0)
+		{
+			if(record.bindings[static_cast<size_t>(answer)].kind != kBindingFunction)
+			{
+				blocked = true;
+			}
+			// A using-declaration copies the target's binding into this scope, so
+			// a name bound here that denotes a function elsewhere is still this
+			// scope's answer.
+			return;
+		}
 	}
 
 	if(record.unnamed && record.parent >= 0)
@@ -1006,7 +996,13 @@ void Analyzer::CollectFrom(int scope, const string& name, vector<Candidate>& out
 	}
 	for(size_t index = 0; index < record.directives.size(); ++index)
 	{
-		CollectFrom(record.directives[index], name, out, visited, blocked);
+		// 7.3.4/2 with 3.3.1: a directive nominates from where it is written, so
+		// one that follows the use does not answer it.
+		if(!Model::Visible(record.directives[index].point, visible_limit_))
+		{
+			continue;
+		}
+		CollectFrom(record.directives[index].scope, name, out, visited, blocked);
 		if(blocked || !out.empty())
 		{
 			return;
@@ -1021,7 +1017,7 @@ void Analyzer::CollectCandidates(int scope, const string& text, vector<Candidate
 	SplitQualifiedName(text, qualifier, name);
 	if(!qualifier.empty())
 	{
-		const int target = model_.ResolveQualifier(scope, qualifier);
+		const int target = model_.ResolveQualifier(scope, qualifier, visible_limit_);
 		vector<int> visited;
 		bool blocked = false;
 		CollectFrom(target, name, out, visited, blocked);
@@ -1207,6 +1203,9 @@ Analyzer::Resolved Analyzer::SemKeywordLiteral(int node, int scope)
 // to, because the name denotes the object rather than the reference.
 Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope, int target)
 {
+	// 3.3.1: this name is used here, so only the declarations that precede it
+	// answer it.
+	const LimitScope limit(*this, node);
 	Resolved result;
 	const string& text = Label(node);
 	const int entity = ResolveValueName(scope, text);
@@ -1233,8 +1232,9 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope, int target)
 		string name;
 		SplitQualifiedName(text, qualifier, name);
 		const int type_entity = qualifier.empty()
-		    ? model_.LookupTypeUnqualified(scope, name)
-		    : model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier), name);
+		    ? model_.LookupTypeUnqualified(scope, name, visible_limit_)
+		    : model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier, visible_limit_),
+		                          name, visible_limit_);
 		if(type_entity >= 0)
 		{
 			result.type_name = true;
@@ -1829,7 +1829,6 @@ Analyzer::Resolved Analyzer::SemSubscript(int node, int scope)
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
 	Resolved right = SemExpr(ChildAt(node, 1), scope);
 	int array_side = -1;
-	int index_side = -1;
 	const int left_type = ReferredType(left.type);
 	const int right_type = ReferredType(right.type);
 	const ETypeKind left_kind = model_.Get(left_type).kind;
@@ -1838,26 +1837,21 @@ Analyzer::Resolved Analyzer::SemSubscript(int node, int scope)
 	const bool right_index = IsIntegralType(right_type) || right_kind == kTypeEnum;
 	if((left_kind == kTypeArray || left_kind == kTypePointer) && right_index)
 	{
+		// 5.2.1/1: `a[i]` is `*(a + i)`, so an array decays first.
 		array_side = left.node;
-		index_side = right.node;
-		if(left_kind == kTypeArray)
-		{
-			// 5.2.1/1: `a[i]` is `*(a + i)`, so an array decays first.
-			(array_side);
-		}
 	}
 	else if((right_kind == kTypeArray || right_kind == kTypePointer) && left_index)
 	{
 		array_side = right.node;
-		index_side = left.node;
 	}
 	else
 	{
 		throw SemanticError("`[]` needs an array or pointer and an integer");
 	}
 	const int source = (array_side == left.node) ? left_type : right_type;
-	const int element = model_.Get(source).kind == kTypeArray ? model_.Get(source).base
-	                                                          : model_.Get(source).base;
+	// 5.2.1/1: the element of an array and the pointee of a pointer are both the
+	// operand type's own operand, so the decayed array and the pointer agree.
+	const int element = model_.Get(source).base;
 	Resolved result;
 	result.type = element;
 	result.category = kLvalue;
@@ -1881,6 +1875,9 @@ Analyzer::Resolved Analyzer::SemSubscript(int node, int scope)
 Analyzer::Resolved Analyzer::SemSizeof(int node, int scope)
 {
 	const int operand = ChildAt(node, 0);
+	// 5.3.3/1: the operand is unevaluated, but the names it writes are still
+	// resolved where they are written.
+	const LimitScope limit(*this, operand);
 	int target = -1;
 	if(Tag(operand) == "type-id")
 	{
@@ -1923,6 +1920,8 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	const string label = Label(node);
 	const string op = AfterColon(label);
 	const Resolved object = SemExpr(ChildAt(node, 0), scope);
+	// 3.3.1: the member is named where the access is written.
+	const LimitScope limit(*this, ChildAt(node, 1));
 	int class_type = ReferredType(object.type);
 	int object_cv = 0;
 	if(model_.Get(class_type).kind == kTypeCv)
@@ -1957,14 +1956,14 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	int class_scope = ClassScopeOf(class_type);
 	if(!qualifier.empty())
 	{
-		search = model_.ResolveQualifier(scope, qualifier);
+		search = model_.ResolveQualifier(scope, qualifier, visible_limit_);
 		class_scope = search;
 	}
 	if(class_scope < 0)
 	{
 		throw SemanticError("`" + qualified + "` does not name a class member");
 	}
-	int member = model_.LookupValueIn(class_scope, member_name);
+	int member = model_.LookupValueIn(class_scope, member_name, visible_limit_);
 	if(member < 0)
 	{
 		// 10/1: a member of a base class is a member of the derived one, so an
@@ -2258,6 +2257,9 @@ Analyzer::Resolved Analyzer::SemCall(int node, int scope)
 	const int callee_node = ChildAt(node, 0);
 	vector<Resolved> arguments;
 	SemArgumentList(node, scope, arguments);
+	// 3.3.1: the callee is named where the call is written, so the overload set
+	// is the one visible there.
+	const LimitScope limit(*this, callee_node);
 
 	if(Tag(callee_node) == "id-expression")
 	{
@@ -2607,6 +2609,8 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope, int target)
 	const string label = Label(node);
 	const int type_node = ChildAt(node, 0);
 	const int operand_node = ChildAt(node, 1);
+	// 3.3.1: the cast's own type name is written here.
+	const LimitScope limit(*this, type_node);
 	const int cast_type = BuildDeclarator(type_node, -1, scope);
 	const Resolved operand = SemExpr(operand_node, scope, cast_type);
 	Resolved result;

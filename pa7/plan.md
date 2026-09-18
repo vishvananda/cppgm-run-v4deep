@@ -4,23 +4,28 @@
 
 - Stage base commit: `91b13266e02a6083457e955235b56e075844a180` (the PA6 audit
   handoff, recorded on entry before any stage edit).
-- Last reviewed commit: `91b13266` (no stage audit has run yet).
+- Last reviewed commit: the audit commit that carries this record; the whole
+  stage was reviewed here against `spec.md`, the handout, the source and the
+  reference, and the review's own findings are below.
 - Implementation commits: `f303ce5d` (the resolved-semantics layer, the tree,
   the dump and the driver), then the conversion, naming, statement and
   reference-binding increments listed under "Findings, changes and evidence",
   then `edd6cbe8` (the function-template slice) and the two corrections the
   slice's own probing found (`23374e43`, `36a66bec`).  The records of those
-  increments are `21fae408` and `a76ef415`.
+  increments are `21fae408` and `a76ef415`.  The audit added the
+  point-of-declaration work described below.
 - Target: `cppgm++ --emit-semantics -o <out> <src>...` runs translation phases
   1-7, the PA5 parse, the PA6 scope/type analysis, resolves expressions,
   statements, calls, conversions and the limited overload set, and writes the
   deterministic resolved-tree dump the checked-in `.ref` files define.
 - Progress: **186 / 186** checked-in PA7 tests pass; `make
-  test-report-through-pa6` passes 498 / 498; `perl
-  scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` reports no issue; the
-  personal differential harness agrees with the reference on 66 curated
-  reproducers; the personal benchmark's dumps are byte-identical to the
-  reference.
+  test-report-through-pa7` passes **684 / 684** across the seven tracked stages
+  (pa1 54, pa2 26, pa3 20, pa4 105, pa5 188, pa6 105, pa7 186); `perl
+  scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` passes with the two
+  pre-existing header-body warnings and no fatal issue; the personal
+  differential harness agrees with the reference on **75** curated reproducers;
+  the personal benchmark's dumps are byte-identical to the reference; the
+  semantic sources build with no warning under `-Wall -Wextra`.
 
 ## Design / spec alignment
 
@@ -114,6 +119,40 @@ pointer-to-member type former and base-class list the call layer needs.
   `break`, `continue`, `default` and a `void` return are checked against the
   statement that encloses them.
 
+### What limits a name lookup
+
+The stage reads a tree the analysis has already finished, so a scope holds every
+name the unit ever declares in it - including names declared *after* the use the
+walk is resolving.  3.3.1 makes a name visible only from its own point of
+declaration, and the reference enforces it: it rejects `void use() { take(1); }
+void take(int);`, `int n = sizeof(m); int m;`, `void use() { n::f(); } namespace
+n { void f(); }` and a using-declaration or using-directive written after the
+use, while it accepts the same names where a later declaration is legitimately
+visible (a member body, which 3.3.7/1 makes a complete-class context).
+
+So the analysis records a point of declaration.  `Model::SetPoint` is the
+position of the declaration being analysed, and every binding made while it is
+current - the binding line, the scope's lookup entry, and the namespace a
+using-directive nominates - carries it.  `Model::Visible` is the whole rule: a
+declaration answers a use when its point precedes the use's, and a use that
+carries no position (the analysis itself) sees everything.
+
+The PA7 walk carries the position of the construct it is reading through
+`Analyzer::LimitScope`, which sets `visible_limit_` from the syntax node being
+resolved and restores the enclosing limit on exit.  A resolution that carries no
+position of its own therefore stays unbounded rather than inheriting a
+neighbour's, which is what keeps the change from narrowing a lookup it does not
+own.  The one deliberate exception is a deferred member body: the reference
+resolves one after the whole unit, so `SemanticsImplicitBodies` opens the limit
+(`visibility_open_`) for it.
+
+`CollectFrom` keeps its fast path: a scope's bindings are in source order, so
+when the name's last declaration precedes the use every earlier one does too,
+and the candidate scan is the one it always was.  Only a name whose last
+declaration follows the use pays for a search back to the last visible one, and
+a name declared here only later leaves the enclosing scope to answer - which is
+what keeps `int g(); void f() { g(); int g; }` resolving to the outer `g`.
+
 ### What the PA5 tree gained
 
 - `PrimaryExpression` accepts a functional cast written with a multi-word type
@@ -194,6 +233,45 @@ harness, and each is a reading the standard and the reference agree on:
   readings was checked against `g++ -std=c++11` before the reference was asked,
   and six reproducers pin them.
 
+### Found by the audit
+
+- **A name was visible before it was declared.**  This is the gap the handoff
+  ledger recorded as the stage's largest, and the audit fixed it rather than
+  carrying it further.  The PA7 walk resolves names against the finished
+  analysis, so it saw every declaration in a scope; the reference resolves at
+  the use, so it rejects a forward use (3.3.1).  Six reduced reproducers now
+  pin the rule in `student.tests/semantics_differential.pl` - a later function,
+  a later overload, a later qualifier, a later initializer target, a later
+  using-declaration and a later using-directive are each rejected, and
+  `int g(); void f() { g(); int g; }` still resolves to the outer `g` because a
+  declaration that is not yet visible does not hide one that is.  The design is
+  above; the change is `Model::Visible`/`SetPoint`, `Analyzer::LimitScope`, the
+  point a `Binding` and a scope's lookup entry now carry, and the point a
+  using-directive's nomination carries.
+- **A using-directive nominated from the whole unit rather than from itself.**
+  `namespace n { int target(); } void use() { target(); } using namespace n;`
+  was accepted; 7.3.4/2 with 3.3.1 makes the nomination take effect at the
+  directive, so the reference rejects it.  The directive now carries its own
+  point of declaration, and both the model's lookup walk and the candidate
+  collector skip a directive written after the use.
+- **Six dead pieces in the semantic sources.**  `DigitValue` and `EndsWith` in
+  `semantic_expression.cpp`, `Number` in `semantic_semantics.cpp`, an unused
+  `cv` in `ClassOfPointer`, an `index_side` and a no-op statement in
+  `SemSubscript`, and a duplicated `if(body < 0) return definition;` in
+  `SemFunctionDefinition`.  `dev/src/semantic/*.cpp` now compiles with no
+  warning under `-Wall -Wextra`, which the earlier record claimed and the build
+  did not show.  `SemSubscript`'s element type was a ternary whose two arms were
+  the same expression; it is now the operand type's own operand, with the
+  comment that says why an array and a pointer agree.
+- **The benchmark timed the reference through its wrapper.**  `pa7/cppgm++-ref`
+  is `scripts/run_reference_binary.sh`, which starts a Perl process to check the
+  binaries before exec'ing the compiler; measured on the frozen corpus that adds
+  0.25 s to every reference run, and the earlier record reported it as the
+  reference compiler's own latency (1.309 s rather than 1.044 s).  The benchmark
+  now ensures the binaries once and times `reference-binaries/cppgm++`
+  directly, so both arms time a compiler and nothing else.  The honest effect is
+  smaller than the earlier record claimed and is reported below.
+
 ## Performance evidence
 
 The protocol is the one section 9 asks for and is what
@@ -210,60 +288,124 @@ invented.
 
 Frozen protocol, 3 000 groups (1 286 528 B of source, a 12 200 816 B dump of
 267 094 resolved nodes), 5 ABBA blocks, 20 timed runs per label, dumps compared
-byte for byte before any timing is accepted.  Measured on `23374e43`, after the
-template slice:
+byte for byte before any timing is accepted.  Measured on the audit commit:
 
 | tool | latency (s) | peak RSS (MB) |
 | --- | --- | --- |
-| `cppgm++-ref` | 1.308 [1.290..1.319] | 147.9 [147.7..148.0] |
-| `cppgm++` | 0.887 [0.880..1.091] | 129.7 [129.3..129.9] |
+| `cppgm++-ref` (the binary) | 1.044 [1.040..1.212] | 147.8 [147.6..147.9] |
+| `cppgm++` | 0.889 [0.884..1.052] | 130.4 [130.0..130.6] |
 
-Paired difference (mine - ref): median -0.4211 s, 5 of 5 blocks negative, MAD
-0.0177 s, range [-0.4387..-0.2120].  A/A calibration on the same schedule:
-paired difference median +0.1036 s, 0 of 5 blocks negative, MAD 0.0104 s,
-range [+0.0075..+0.1217].  The A/A arm took an excursion on this run - its
-range is 12x its own MAD - so the honest noise floor is the MAD, and the
-latency effect is 40x it.  Every observation is kept in
+Paired difference (mine - ref): median -0.1512 s, 5 of 5 blocks negative, MAD
+0.0096 s, range [-0.1628..-0.1395].  A/A calibration on the same schedule:
+paired difference median +0.0114 s, 0 of 5 blocks negative, MAD 0.0074 s,
+range [+0.0040..+0.1079].  The noise floor is the MAD, and the latency effect
+is 20x it: the compiler is 14.5% faster than the reference on this corpus and
+uses 11.8% less peak memory.  Every observation is kept in
 `/tmp/pa7_semantics_benchmark/semantics_benchmark.tsv`.  The dump is
 byte-identical to the reference, so the latency difference is the compiler's
 own work and not a different output.
 
+The earlier record reported the reference through `pa7/cppgm++-ref`, which adds
+a fixed 0.25 s of wrapper startup to every run (1.309 s rather than 1.044 s);
+the effect it reported, -0.4211 s, was that wrapper plus the real difference.
+The wrapper is still what the correctness harnesses use; only the timing arm
+changed, and the earlier numbers are kept above in "Findings, changes and
+evidence" rather than silently replaced.
+
+The point-of-declaration tables are the audit's one measurable cost.  On the
+same 4 000-group corpus, measured either side of the change: 1.15 s / 154.4 MB
+before, 1.16 s / 157.2 MB after - about 1% latency and 1.8% peak memory for
+correct lookup, with the dump byte-identical either way.  Well inside the
+level's budget, and the compiler is still ahead of the reference on both.
+
 The scaling is linear in the declarations and the expressions they hold,
-measured from outside on the same corpus generator, on the same commit:
+measured from outside on the same corpus generator, on the audit commit:
 
 | groups | source bytes | latency (s) | peak RSS (MB) |
 | --- | --- | --- | --- |
-| 500 | 214 527 | 0.155 | 23.1 |
-| 1 000 | 428 528 | 0.296 | 41.6 |
-| 2 000 | 857 528 | 0.584 | 78.0 |
-| 4 000 | 1 715 528 | 1.171 | 150.8 |
+| 500 | 214 527 | 0.15 | 23.8 |
+| 1 000 | 428 528 | 0.29 | 42.6 |
+| 2 000 | 857 528 | 0.58 | 80.0 |
+| 4 000 | 1 715 528 | 1.16 | 157.0 |
 
 Doubling the input doubles both, which is what "semantic work tracks actual
 declarations, lookup candidates and demanded specialization facts" means.  No
 optimization bodies, caches or telemetry surface were added, so there is no
 compiler-work budget to justify and none is claimed.
 
+`--emit-semantics` has no executable output, so generated-program runtime and
+generated text size do not exist at this stage; the only code this stage emits
+is the dump, whose size is reported above beside the latency and the memory.
+There is no executable benchmark to review here, and none is invented.
+
 ## Validation
 
-- `make test-pa7` - 186 / 186.
-- `make test-report-through-pa6` - 498 / 498 (pa1-pa4 205 / 205, pa5 188 / 188,
-  pa6 105 / 105).
-- `perl scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` - pass (77
-  files checked, 2 warnings about the two headers' inline bodies).
+- `make test-report-through-pa7` - 684 / 684 (pa1 54, pa2 26, pa3 20, pa4 105,
+  pa5 188, pa6 105, pa7 186); `make test-pa7` alone is 186 / 186.
+- `perl scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` - pass, with
+  the two pre-existing warnings about the two headers' inline bodies and no
+  fatal issue.
 - `student.tests/semantics_benchmark.pl` - dumps byte-identical to the
   reference; latency and peak RSS reported above.
-- `student.tests/semantics_differential.pl` - 66 curated reduced reproducers of
-  the conversion, ranking, value-category, naming, statement-scope, template
-  and rejection corners agree with the reference in exit status and dump.
-- `dev/src/semantic/*.cpp` compile clean under `-Wall -Wextra`.
+- `student.tests/semantics_differential.pl` - **75** curated reduced
+  reproducers agree with the reference in exit status and dump: the conversion,
+  ranking, value-category, naming, statement-scope and rejection corners, the
+  function-template corners, and the ten point-of-declaration readings the audit
+  added.
+- `dev/src/semantic/*.cpp` compile with no warning under `-Wall -Wextra`.
+- The two architecture traces below were run on the audit commit and their dumps
+  compared byte for byte with the reference's.
+
+### Architecture traces
+
+**A declaration with a class, a member access and a conversion.**  For
+
+```cpp
+struct point { int x; int y; };
+int take(const void* value);
+int use(int a) { point p; p.x = a; return take(&p); }
+```
+
+the phases run once each and in one direction: bytes to `TranslatedSource`, the
+token cursor to `PostTokenStream`, the parser to the `SyntaxArena`, and
+`Analyzer::Run` over that arena in source order - `AnalyzeClassSpecifier` opens
+the class scope and binds `x` and `y` with their points of declaration,
+`BuildDeclarator` builds `take`'s function type from the pointer and `const void`
+it names and `NoteDeclaration` records the fact at the declarator node.  No
+syntax is re-parsed and no semantic decision is recomputed.  `BuildSemantics`
+then reads those facts back: `SemFunctionDefinition` takes the recorded type and
+scope, `SemSimpleDeclaration` reads `p`'s declaration fact rather than
+re-analysing the declarator, the member access resolves through the recorded
+class scope, and the call collects candidates from the scope's indexed values
+with the callee's point as the visibility limit, ranks the one conversion
+(4.10's object pointer to `const void*`), and prints the `callee` line.  The
+dump is byte-identical to the reference's, including the `constructor-action`
+the implicit constructor needs.
+
+**A demanded template.**  For `template<class T> void take(T); void use() {
+take(1); }`, `AnalyzeTemplateDeclaration` opens one template-parameter scope,
+binds `T` there, analyses the declaration *in that scope* so the template's
+own entity never enters the enclosing scope's value table, and registers the
+template in the enclosing scope with the declaration's own scope (14.1/2).
+The walk prints nothing for the declaration itself (`SemTemplateDeclaration`
+returns no node, as the reference does) and, at the call, ordinary candidate
+collection finds nothing, so `FindFunctionTemplates` is asked: 14.8.2 deduces
+`T = int` from the argument, the specialization is *substituted* but not yet
+instantiated, the ranking picks it, and only then does
+`InstantiateFunctionTemplate` declare it - once, memoized by (template,
+substituted type) in `specializations_`, and recorded in demand order for
+`SemInstantiations` to print after the unit's own declarations.  The trace
+prints `callee take function of (int) returning void` and one
+`function-declaration take function of (int) returning void` line, byte-identical
+to the reference.
 
 ## Handoff ledger
 
 ### Unfinished implementation
 
-Two related pieces of the template slice are still missing, and both are
-recorded with a reduced reproducer rather than waived.  Neither is a failing
-fixture: the checked-in suite is 186 / 186.
+One piece of the template slice is still missing, recorded with a reduced
+reproducer rather than waived.  It is not a failing fixture: the checked-in
+suite is 186 / 186.
 
 1. **A template definition is not instantiated as a definition.**
    `template<class T> void take(T) {} void use() { take(1); }` prints
@@ -276,21 +418,12 @@ fixture: the checked-in suite is 186 / 186.
    *template's* scope.  That is a second instantiation engine, not an extension
    of the substitution this stage has, and the handout puts it out of scope
    twice over ("template functions", "class-aware call resolution").  The
-   fixture set reaches templates only through declarations.
-2. **A declaration is visible before it is declared.**  `void use() { take(1); }
-   void take(int);` is rejected by the reference and by `g++ -std=c++11`, and
-   accepted here, because the PA7 walk runs after the whole PA6 analysis and
-   `CollectCandidates` reads the scope's final binding list.  The same holds for
-   the template path: with `template<class T> void take(T); void use() {
-   take(1); } void take(int);` the reference resolves the call to the
-   instantiation and this compiler resolves it to the later non-template.  This
-   is not a template defect - it is the shared lookup's, and it predates this
-   stage - but it is the largest correctness gap the stage has.  Fixing it means
-   recording the point each declaration landed at and filtering lookup by the
-   use's own point, and that rule has to exempt a class's complete-class context
-   (3.3.7), where a later member *is* visible; the change touches every lookup
-   path in a stage that currently passes 186 / 186 and 498 / 498, so it is
-   recorded for the audit rather than attempted here.
+   fixture set reaches templates only through declarations, and the audit kept
+   the boundary rather than growing the engine inside an audit.
+
+The audit's own gap - **a declaration visible before it is declared** - is
+fixed; see "Found by the audit" above for the rule, the reduced reproducers and
+the measurement.
 
 ### Known differences outside the slice
 
@@ -309,6 +442,25 @@ fixture.
   `g++ -std=c++11` rejects the input for the argument's type, and this compiler
   now rejects it for the same reason, so the two agree on the exit status and
   not on the message - diagnostic text is not compared.
+- **A member body the unit does not demand.**  `struct S { int f() { return 0; }
+  };` prints nothing in the reference and the body here, because the reference
+  prints a deferred member body only where the unit demands it (3.2), and this
+  stage prints every deferred body it recorded.  `struct S { int f() { return g();
+  } }; int g();` is the same difference with a name in the body.  The one
+  fixture that reaches an in-class body demands it
+  (`300-deferred-demand-closure` takes the member's address), which is why the
+  two agree there.  Both sides exit 0, so this is a dump difference inside
+  "class-aware call resolution", which the handout puts out of scope.
+- **A member named inside a member body.**  `struct S { int m; int f(); }; int
+  S::f() { return m; }` prints `id-expression lvalue int m` here and
+  `member-expression lvalue int m` over `id-expression prvalue pointer to struct
+  S this` in the reference, which writes the implicit object parameter the
+  handout's *Out Of Scope* list names.  Both exit 0.
+- **The order of an implicit constructor against a deferred body.**  Where both
+  appear, the reference prints them in demand order and this stage prints the
+  deferred bodies first; the audit's `struct S { int f() { return 0; } }; int g()
+  { S s; return s.f(); }` shows it.  No fixture pins the order, and both are
+  class-surface lines the handout puts out of scope.
 
 ### Independent review questions
 
@@ -357,5 +509,13 @@ reading the stage chose where the handout does not pin the behaviour.
 ### Known differences from the reference
 
 None inside the slice.  The differential harness's curated list holds the
-readings that could have diverged - now including twenty-one template
-reproducers - and every one of them agrees in exit status and dump.
+readings that could have diverged - twenty-one template reproducers and the ten
+point-of-declaration readings the audit added among them - and every one of them
+agrees in exit status and dump.  The differences the audit found are all in the
+class surface the handout's *Out Of Scope* list names, and they are listed above
+with the reduced reproducer for each.
+
+The audit also swept 46 further reduced probes (forward and backward uses across
+namespaces, blocks, classes, using-declarations, using-directives, namespace
+aliases, enumerations, templates and initializers) and every one agrees with the
+reference on exit status.

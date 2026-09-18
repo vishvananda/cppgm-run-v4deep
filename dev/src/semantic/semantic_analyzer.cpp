@@ -36,6 +36,8 @@ Analyzer::Analyzer(Model& model, const syntax::SyntaxArena& arena,
 	, return_is_void_(false)
 	, loop_depth_(0)
 	, switch_depth_(0)
+	, visible_limit_(-1)
+	, visibility_open_(false)
 	, builtin_abort_(-1)
 {}
 
@@ -125,6 +127,11 @@ bool Analyzer::IsDeclarationTag(const string& tag) const
 
 void Analyzer::AnalyzeDeclaration(int node, int scope, int enclosing_class)
 {
+	// 3.3.1: the names this declaration binds become visible here, so every
+	// binding made while it is analysed records this position as its point of
+	// declaration.  The walk is in source order, so the position only moves
+	// forward and a later declaration cannot answer an earlier use.
+	model_.SetPoint(arena_.Start(node));
 	const string& tag = Tag(node);
 	if(tag == "simple-declaration")
 	{
@@ -210,7 +217,7 @@ void Analyzer::AnalyzeNamespaceDefinition(int node, int scope)
 			// An unnamed namespace's members are visible in the enclosing
 			// scope, which is what a using-directive does (7.3.1.1/1).
 			model_.BindNamespace(scope, written, target);
-			model_.ScopeOf(scope).directives.push_back(target);
+			model_.AddDirective(scope, target);
 		}
 	}
 	else
@@ -294,7 +301,7 @@ void Analyzer::AnalyzeUsingDirective(int node, int scope)
 		throw SemanticError("using-directive target `" + Label(target_node) +
 		                    "` is not a namespace");
 	}
-	model_.ScopeOf(scope).directives.push_back(target);
+	model_.AddDirective(scope, target);
 }
 
 void Analyzer::AnalyzeUsingDeclaration(int node, int scope)

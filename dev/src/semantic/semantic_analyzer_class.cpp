@@ -184,11 +184,12 @@ int Analyzer::ResolveTypeName(int scope, const string& text, bool elaborated_cla
 	int entity = -1;
 	if(qualifier.empty())
 	{
-		entity = model_.LookupTypeUnqualified(scope, name);
+		entity = model_.LookupTypeUnqualified(scope, name, visible_limit_);
 	}
 	else
 	{
-		entity = model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier), name);
+		entity = model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier, visible_limit_),
+		                             name, visible_limit_);
 	}
 	if(entity < 0)
 	{
@@ -210,9 +211,10 @@ int Analyzer::ResolveValueName(int scope, const string& text)
 	SplitQualifiedName(text, qualifier, name);
 	if(qualifier.empty())
 	{
-		return model_.LookupValueUnqualified(scope, name);
+		return model_.LookupValueUnqualified(scope, name, visible_limit_);
 	}
-	return model_.LookupValueIn(model_.ResolveQualifier(scope, qualifier), name);
+	return model_.LookupValueIn(model_.ResolveQualifier(scope, qualifier, visible_limit_),
+	                            name, visible_limit_);
 }
 
 int Analyzer::ResolveNamespaceName(int scope, const string& text)

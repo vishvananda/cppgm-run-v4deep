@@ -115,7 +115,8 @@ const char* const kFundamentalNames[] =
 };
 
 Model::Model()
-	: global_(-1)
+	: point_(-1)
+	, global_(-1)
 {
 	// The global namespace is the root every translation unit is analysed in.
 	global_ = NewScope(kScopeNamespace, "<global>", -1);
@@ -707,31 +708,69 @@ int Model::NewEntity(EEntityKind kind, const string& name)
 
 void Model::AddBinding(int scope, const Binding& binding)
 {
-	scopes_[static_cast<size_t>(scope)].bindings.push_back(binding);
+	Binding line = binding;
+	line.point = point_;
+	scopes_[static_cast<size_t>(scope)].bindings.push_back(line);
+}
+
+namespace
+{
+
+// Which of a scope's three name tables a binding or a lookup consults.
+enum ELookupCategory
+{
+	kLookupType = 0,
+	kLookupValue,
+	kLookupNamespace
+};
+
+}  // namespace
+
+void Model::Bind(int scope, const string& name, int id, int category)
+{
+	if(name.empty())
+	{
+		return;
+	}
+	ScopeName entry;
+	entry.id = id;
+	entry.point = point_;
+	Scope& record = scopes_[static_cast<size_t>(scope)];
+	if(category == kLookupValue)
+	{
+		record.values[name] = entry;
+	}
+	else if(category == kLookupNamespace)
+	{
+		record.namespaces[name] = entry;
+	}
+	else
+	{
+		record.types[name] = entry;
+	}
 }
 
 void Model::BindType(int scope, const string& name, int entity)
 {
-	if(!name.empty())
-	{
-		scopes_[static_cast<size_t>(scope)].types[name] = entity;
-	}
+	Bind(scope, name, entity, kLookupType);
 }
 
 void Model::BindValue(int scope, const string& name, int entity)
 {
-	if(!name.empty())
-	{
-		scopes_[static_cast<size_t>(scope)].values[name] = entity;
-	}
+	Bind(scope, name, entity, kLookupValue);
 }
 
 void Model::BindNamespace(int scope, const string& name, int scope_id)
 {
-	if(!name.empty())
-	{
-		scopes_[static_cast<size_t>(scope)].namespaces[name] = scope_id;
-	}
+	Bind(scope, name, scope_id, kLookupNamespace);
+}
+
+void Model::AddDirective(int scope, int target)
+{
+	Scope::Directive directive;
+	directive.scope = target;
+	directive.point = point_;
+	scopes_[static_cast<size_t>(scope)].directives.push_back(directive);
 }
 
 int Model::ScopeFor(int owner, int entity, EScopeKind kind, const string& name)
@@ -759,23 +798,11 @@ int Model::ScopeFor(int owner, int entity, EScopeKind kind, const string& name)
 // Lookup
 // ---------------------------------------------------------------------------
 
-namespace
-{
-
-// Which of a scope's three name maps a lookup consults.
-enum ELookupCategory
-{
-	kLookupType = 0,
-	kLookupValue,
-	kLookupNamespace
-};
-
-}  // namespace
-
-int Model::LookupInCategory(int scope, const string& name, int category) const
+int Model::LookupInCategory(int scope, const string& name, int category,
+                            long long limit) const
 {
 	const Scope& record = ScopeOf(scope);
-	const map<string, int>* table = &record.types;
+	const map<string, ScopeName>* table = &record.types;
 	if(category == kLookupValue)
 	{
 		table = &record.values;
@@ -784,14 +811,18 @@ int Model::LookupInCategory(int scope, const string& name, int category) const
 	{
 		table = &record.namespaces;
 	}
-	map<string, int>::const_iterator found = table->find(name);
-	return found == table->end() ? -1 : found->second;
+	map<string, ScopeName>::const_iterator found = table->find(name);
+	if(found == table->end() || !Visible(found->second.point, limit))
+	{
+		return -1;
+	}
+	return found->second.id;
 }
 
 // A namespace scope's own declarations, then the namespaces its
 // using-directives nominate, then its inline namespaces (7.3.4/2, 7.3.1/8).
 int Model::LookupThrough(int scope, const string& name, int category,
-                         vector<int>& visited) const
+                         long long limit, vector<int>& visited) const
 {
 	for(size_t index = 0; index < visited.size(); ++index)
 	{
@@ -802,7 +833,7 @@ int Model::LookupThrough(int scope, const string& name, int category,
 	}
 	visited.push_back(scope);
 
-	const int direct = LookupInCategory(scope, name, category);
+	const int direct = LookupInCategory(scope, name, category, limit);
 	if(direct >= 0)
 	{
 		return direct;
@@ -813,7 +844,7 @@ int Model::LookupThrough(int scope, const string& name, int category,
 	// declared, which its enclosing scope is.
 	if(record.unnamed && record.parent >= 0)
 	{
-		const int inherited = LookupThrough(record.parent, name, category, visited);
+		const int inherited = LookupThrough(record.parent, name, category, limit, visited);
 		if(inherited >= 0)
 		{
 			return inherited;
@@ -823,7 +854,8 @@ int Model::LookupThrough(int scope, const string& name, int category,
 	int result = -1;
 	for(size_t index = 0; index < record.inline_namespaces.size(); ++index)
 	{
-		const int found = LookupThrough(record.inline_namespaces[index], name, category, visited);
+		const int found = LookupThrough(record.inline_namespaces[index], name, category,
+		                                limit, visited);
 		if(found >= 0)
 		{
 			if(result >= 0 && result != found)
@@ -835,7 +867,12 @@ int Model::LookupThrough(int scope, const string& name, int category,
 	}
 	for(size_t index = 0; index < record.directives.size(); ++index)
 	{
-		const int found = LookupThrough(record.directives[index], name, category, visited);
+		if(!Visible(record.directives[index].point, limit))
+		{
+			continue;
+		}
+		const int found = LookupThrough(record.directives[index].scope, name, category, limit,
+		                                visited);
 		if(found >= 0)
 		{
 			if(result >= 0 && result != found)
@@ -848,26 +885,26 @@ int Model::LookupThrough(int scope, const string& name, int category,
 	return result;
 }
 
-int Model::LookupType(int scope, const string& name) const
+int Model::LookupType(int scope, const string& name, long long limit) const
 {
-	return LookupInCategory(scope, name, kLookupType);
+	return LookupInCategory(scope, name, kLookupType, limit);
 }
 
-int Model::LookupValue(int scope, const string& name) const
+int Model::LookupValue(int scope, const string& name, long long limit) const
 {
-	return LookupInCategory(scope, name, kLookupValue);
+	return LookupInCategory(scope, name, kLookupValue, limit);
 }
 
-int Model::LookupNamespace(int scope, const string& name) const
+int Model::LookupNamespace(int scope, const string& name, long long limit) const
 {
-	return LookupInCategory(scope, name, kLookupNamespace);
+	return LookupInCategory(scope, name, kLookupNamespace, limit);
 }
 
 // The same walk as `LookupThrough` without the using-directive nominations:
 // what the enclosing scopes themselves declare, and what their inline
 // namespaces do.
 int Model::LookupThroughDirect(int scope, const string& name, int category,
-                               vector<int>& visited) const
+                               long long limit, vector<int>& visited) const
 {
 	for(size_t index = 0; index < visited.size(); ++index)
 	{
@@ -878,7 +915,7 @@ int Model::LookupThroughDirect(int scope, const string& name, int category,
 	}
 	visited.push_back(scope);
 
-	const int direct = LookupInCategory(scope, name, category);
+	const int direct = LookupInCategory(scope, name, category, limit);
 	if(direct >= 0)
 	{
 		return direct;
@@ -886,7 +923,8 @@ int Model::LookupThroughDirect(int scope, const string& name, int category,
 	const Scope& record = ScopeOf(scope);
 	if(record.unnamed && record.parent >= 0)
 	{
-		const int inherited = LookupThroughDirect(record.parent, name, category, visited);
+		const int inherited = LookupThroughDirect(record.parent, name, category, limit,
+		                                          visited);
 		if(inherited >= 0)
 		{
 			return inherited;
@@ -895,7 +933,7 @@ int Model::LookupThroughDirect(int scope, const string& name, int category,
 	for(size_t index = 0; index < record.inline_namespaces.size(); ++index)
 	{
 		const int found = LookupThroughDirect(record.inline_namespaces[index], name, category,
-		                                      visited);
+		                                      limit, visited);
 		if(found >= 0)
 		{
 			return found;
@@ -904,54 +942,40 @@ int Model::LookupThroughDirect(int scope, const string& name, int category,
 	return -1;
 }
 
-int Model::LookupTypeQualifier(int scope, const string& name) const
+int Model::LookupTypeQualifier(int scope, const string& name, long long limit) const
 {
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
 	{
 		vector<int> visited;
-		const int found = LookupThroughDirect(current, name, kLookupType, visited);
+		const int found = LookupThroughDirect(current, name, kLookupType, limit, visited);
 		if(found >= 0)
 		{
 			return found;
 		}
 	}
-	return LookupTypeUnqualified(scope, name);
+	return LookupTypeUnqualified(scope, name, limit);
 }
 
-int Model::LookupNamespaceQualifier(int scope, const string& name) const
+int Model::LookupNamespaceQualifier(int scope, const string& name, long long limit) const
 {
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
 	{
 		vector<int> visited;
-		const int found = LookupThroughDirect(current, name, kLookupNamespace, visited);
+		const int found = LookupThroughDirect(current, name, kLookupNamespace, limit, visited);
 		if(found >= 0)
 		{
 			return found;
 		}
 	}
-	return LookupNamespaceUnqualified(scope, name);
+	return LookupNamespaceUnqualified(scope, name, limit);
 }
 
-int Model::LookupTypeUnqualified(int scope, const string& name) const
+int Model::LookupTypeUnqualified(int scope, const string& name, long long limit) const
 {
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
 	{
 		vector<int> visited;
-		const int found = LookupThrough(current, name, kLookupType, visited);
-		if(found >= 0)
-		{
-			return found;
-		}
-	}
-	return -1;
-}
-
-int Model::LookupValueUnqualified(int scope, const string& name) const
-{
-	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
-	{
-		vector<int> visited;
-		const int found = LookupThrough(current, name, kLookupValue, visited);
+		const int found = LookupThrough(current, name, kLookupType, limit, visited);
 		if(found >= 0)
 		{
 			return found;
@@ -960,7 +984,21 @@ int Model::LookupValueUnqualified(int scope, const string& name) const
 	return -1;
 }
 
-int Model::LookupNamespaceUnqualified(int scope, const string& name) const
+int Model::LookupValueUnqualified(int scope, const string& name, long long limit) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		vector<int> visited;
+		const int found = LookupThrough(current, name, kLookupValue, limit, visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
+}
+
+int Model::LookupNamespaceUnqualified(int scope, const string& name, long long limit) const
 {
 	// 7.3.4/2: a using-directive makes the nominated namespace's names appear as
 	// if they were declared in the nearest enclosing namespace, so a namespace
@@ -969,7 +1007,7 @@ int Model::LookupNamespaceUnqualified(int scope, const string& name) const
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
 	{
 		vector<int> visited;
-		const int found = LookupThrough(current, name, kLookupNamespace, visited);
+		const int found = LookupThrough(current, name, kLookupNamespace, limit, visited);
 		if(found >= 0)
 		{
 			return found;
@@ -978,25 +1016,25 @@ int Model::LookupNamespaceUnqualified(int scope, const string& name) const
 	return -1;
 }
 
-int Model::LookupTypeIn(int scope, const string& name) const
+int Model::LookupTypeIn(int scope, const string& name, long long limit) const
 {
 	vector<int> visited;
-	return LookupThrough(scope, name, kLookupType, visited);
+	return LookupThrough(scope, name, kLookupType, limit, visited);
 }
 
-int Model::LookupValueIn(int scope, const string& name) const
+int Model::LookupValueIn(int scope, const string& name, long long limit) const
 {
 	vector<int> visited;
-	return LookupThrough(scope, name, kLookupValue, visited);
+	return LookupThrough(scope, name, kLookupValue, limit, visited);
 }
 
-int Model::LookupNamespaceIn(int scope, const string& name) const
+int Model::LookupNamespaceIn(int scope, const string& name, long long limit) const
 {
 	vector<int> visited;
-	return LookupThrough(scope, name, kLookupNamespace, visited);
+	return LookupThrough(scope, name, kLookupNamespace, limit, visited);
 }
 
-int Model::ResolveQualifier(int scope, const string& qualifier) const
+int Model::ResolveQualifier(int scope, const string& qualifier, long long limit) const
 {
 	// A nested-name-specifier is a run of components ending in `::`.  Each
 	// component is a namespace, a class or an enumeration; the last one names
@@ -1021,16 +1059,16 @@ int Model::ResolveQualifier(int scope, const string& qualifier) const
 		// namespace-only context must not be answered by a value or a class of
 		// the same spelling (3.4.3).
 		const int found = current < 0
-		    ? LookupNamespaceQualifier(base, component)
-		    : LookupNamespaceIn(base, component);
+		    ? LookupNamespaceQualifier(base, component, limit)
+		    : LookupNamespaceIn(base, component, limit);
 		if(found >= 0)
 		{
 			current = found;
 			continue;
 		}
 		const int entity = current < 0
-		    ? LookupTypeQualifier(base, component)
-		    : LookupTypeIn(base, component);
+		    ? LookupTypeQualifier(base, component, limit)
+		    : LookupTypeIn(base, component, limit);
 		if(entity < 0)
 		{
 			throw SemanticError("unknown name `" + component + "` in a qualifier");
