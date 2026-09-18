@@ -696,7 +696,7 @@ int Analyzer::SemStatement(int node, int scope)
 		const int child = ChildAt(node, 0);
 		if(child >= 0)
 		{
-			Resolved value = SemExpr(child, scope);
+			Resolved value = SemExpr(child, scope, ReferredType(return_type_));
 			if(return_is_void_)
 			{
 				throw SemanticError("a value cannot be returned from a void function");
