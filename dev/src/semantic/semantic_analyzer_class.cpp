@@ -432,9 +432,11 @@ void Analyzer::OpenFunctionScope(int owner, const string& name,
 		model_.AddBinding(function_scope, binding);
 		// 3.3.3/1: a parameter's name is visible in the function body, so the
 		// parameter takes part in ordinary lookup like any other declaration.
-		model_.BindValue(function_scope, binding.name, model_.NewEntity(kEntityObject,
-		                                                               binding.name));
-		model_.EntityOf(model_.LookupValue(function_scope, binding.name)).type = binding.type;
+		// An unnamed parameter binds nothing, which `BindValue` itself skips.
+		const int parameter = model_.NewEntity(kEntityObject, binding.name);
+		model_.EntityOf(parameter).type = binding.type;
+		model_.EntityOf(parameter).decl_scope = function_scope;
+		model_.BindValue(function_scope, binding.name, parameter);
 	}
 	AnalyzeCompoundStatement(body, function_scope);
 }
