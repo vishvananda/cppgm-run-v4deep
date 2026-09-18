@@ -31,7 +31,9 @@ void WriteNode(ostream& out, const SemTree& tree, int node, int depth)
 	out << record.tag;
 	if(record.label_first)
 	{
-		if(!record.label.empty())
+		// A declaration's name is a field even when it is empty, so an unnamed
+		// parameter still prints the space it would have occupied.
+		if(!record.label.empty() || !record.type.empty())
 		{
 			out << ' ' << record.label;
 		}

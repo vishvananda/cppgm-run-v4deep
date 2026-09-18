@@ -301,10 +301,12 @@ private:
 	void SemLinkageSpecification(int node, int scope, std::vector<int>& out);
 	int SemMemberPointerTarget(int node, int scope);
 	int SemInitializer(int node, int scope, int type, const std::string& name,
-	                   int entity);
+	                   int entity, bool is_constexpr);
 	int SemVariable(int scope, const std::string& name, int entity, int type,
-	                int initializer);
+	                int initializer, bool is_constexpr);
+	bool IsConstexprSpecifier(int seq) const;
 	int SemAnonymousUnionStorage(int specifier, int scope);
+	int SemSpecialMember(int node, int scope);
 
 	// --- statements -------------------------------------------------------
 	int SemStatement(int node, int scope);

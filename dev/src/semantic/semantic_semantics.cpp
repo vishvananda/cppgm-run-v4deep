@@ -28,6 +28,13 @@ string AfterColon(const string& text)
 	return colon == string::npos ? string() : text.substr(colon + 1);
 }
 
+// The plain word a terminal node's label carries, for a keyword written as
+// `KW_CONSTEXPR:constexpr`.
+string OperatorWord(const string& label)
+{
+	return AfterColon(label);
+}
+
 string Number(long long value)
 {
 	ostringstream out;
@@ -122,6 +129,51 @@ void Analyzer::SemDeclaration(int node, int scope, vector<int>& out)
 		}
 		return;
 	}
+	if(tag == "special-member-declaration" || tag == "special-member-definition")
+	{
+		// 12.1/5, 12.4/3: `= default` and `= delete` declare the special member
+		// the class's own name calls, which the dump shows as a definition with
+		// the body the source did not write.
+		const int built = SemSpecialMember(node, scope);
+		if(built >= 0)
+		{
+			out.push_back(built);
+		}
+		return;
+	}
+}
+
+int Analyzer::SemSpecialMember(int node, int scope)
+{
+	(void)scope;
+	const int declarator = FindChild(node, "declarator");
+	const Model::DeclarationFact* fact = model_.DeclarationAt(declarator);
+	if(fact == 0)
+	{
+		return -1;
+	}
+	const int definition = sem_.Add("function-definition", QualifiedEntityName(fact->entity),
+	                                true);
+	sem_.SetType(definition, BoundSpelling(fact->type, fact->scope));
+	const int clause = FindChild(declarator, "parameter-clause");
+	if(clause >= 0)
+	{
+		const vector<int> parameters = ChildrenOf(clause);
+		for(size_t index = 0; index < parameters.size(); ++index)
+		{
+			const Model::DeclarationFact* parameter =
+			    model_.DeclarationAt(parameters[index]);
+			if(parameter == 0)
+			{
+				continue;
+			}
+			const int built = sem_.Add("parameter", string(), true);
+			sem_.SetType(built, Spell(model_.AdjustParameter(parameter->type)));
+			sem_.AddChild(definition, built);
+		}
+	}
+	sem_.AddChild(definition, sem_.Add("compound-statement"));
+	return definition;
 }
 
 int Analyzer::SemNamespaceDefinition(int node, int scope)
@@ -248,18 +300,19 @@ void Analyzer::SemSimpleDeclaration(int node, int scope, vector<int>& out)
 			out.push_back(declaration);
 			continue;
 		}
-		out.push_back(SemVariable(scope, name, fact->entity, fact->type, initializer));
+		out.push_back(SemVariable(scope, name, fact->entity, fact->type, initializer,
+		                          IsConstexprSpecifier(seq)));
 		(void)node;
 	}
 }
 
 // One declared object: its line, and whatever initialised it.
 int Analyzer::SemVariable(int scope, const string& name, int entity, int type,
-                          int initializer)
+                          int initializer, bool is_constexpr)
 {
 	const int variable = sem_.Add("variable", name, true);
 	sem_.SetType(variable, Spell(type));
-	const int built = SemInitializer(initializer, scope, type, name, entity);
+	const int built = SemInitializer(initializer, scope, type, name, entity, is_constexpr);
 	if(built >= 0)
 	{
 		sem_.AddChild(variable, built);
@@ -270,7 +323,8 @@ int Analyzer::SemVariable(int scope, const string& name, int entity, int type,
 // The value a declaration gives its object: an initializer, a braced list, a
 // direct-initialisation, or - for a class with none - the constructor an object
 // of that type needs (8.5/6).
-int Analyzer::SemInitializer(int node, int scope, int type, const string& name, int entity)
+int Analyzer::SemInitializer(int node, int scope, int type, const string& name, int entity,
+                             bool is_constexpr)
 {
 	const int plain = ReferredType(type);
 	if(node < 0)
@@ -294,6 +348,16 @@ int Analyzer::SemInitializer(int node, int scope, int type, const string& name, 
 	if(tag == "braced-init-list")
 	{
 		Resolved result = SemBracedInit(child, scope);
+		// 8.3.4/3: an array of unknown bound takes the bound its initialiser
+		// gives it, which is the type both lines print.
+		if(model_.Get(plain).kind == kTypeArray && model_.Get(plain).bound < 0)
+		{
+			const int bound = model_.Array(static_cast<long long>(result.node >= 0
+			        ? sem_.Node(result.node).children.size() : 0),
+			        model_.Get(plain).base);
+			type = bound;
+			sem_.SetType(result.node, Spell(bound));
+		}
 		result.type = type;
 		result.category = kLvalue;
 		sem_.SetType(result.node, Spell(type));
@@ -321,7 +385,38 @@ int Analyzer::SemInitializer(int node, int scope, int type, const string& name, 
 	{
 		return -1;
 	}
-	return SemExpr(child, scope).node;
+	Resolved value = SemExpr(child, scope);
+	if(value.null_zero && NullPointerTarget(ReferredType(type)) >= 0)
+	{
+		// 4.10/1: an integer literal zero that initialises a pointer prints as
+		// the pointer it converted to.
+		sem_.SetType(value.node, Spell(ReferredType(type)));
+	}
+	if(is_constexpr && !value.null_zero)
+	{
+		// A constant object's initialiser is folded, so the literal carries the
+		// type the object was declared with.
+		sem_.SetType(value.node, Spell(type));
+	}
+	return value.node;
+}
+
+// Whether a decl-specifier-seq wrote `constexpr`.
+bool Analyzer::IsConstexprSpecifier(int seq) const
+{
+	if(seq < 0)
+	{
+		return false;
+	}
+	const vector<int> children = ChildrenOf(seq);
+	for(size_t index = 0; index < children.size(); ++index)
+	{
+		if(OperatorWord(Label(children[index])) == "constexpr")
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 // The constructor an object definition of class type needs when it has no
@@ -434,7 +529,9 @@ int Analyzer::SemFunctionDefinition(int node, int scope)
 			}
 			CollectDeclaratorName(inner, name);
 			const int built = sem_.Add("parameter", name, true);
-			sem_.SetType(built, Spell(parameter->type));
+			// 8.3.5/5: a by-value parameter takes the unqualified type of its
+			// own declaration, which is what the signature is built from.
+			sem_.SetType(built, Spell(model_.AdjustParameter(parameter->type)));
 			sem_.AddChild(definition, built);
 		}
 	}
@@ -499,9 +596,14 @@ int Analyzer::SemStatement(int node, int scope)
 	{
 		return -1;
 	}
-	if(scope < 0)
+	const int noted = model_.ScopeAt(node);
+	if(noted >= 0)
 	{
-		scope = model_.ScopeAt(node);
+		scope = noted;
+	}
+	else if(scope < 0)
+	{
+		scope = model_.GlobalScope();
 	}
 	const string& tag = Tag(node);
 	if(tag == "compound-statement")
@@ -752,7 +854,7 @@ int Analyzer::SemCondition(int node, int scope, bool switch_context)
 	const int variable = sem_.Add("variable", name, true);
 	sem_.SetType(variable, Spell(fact->type));
 	const int built_initializer = SemInitializer(initializer, scope, fact->type, name,
-	                                             fact->entity);
+	                                             fact->entity, false);
 	if(built_initializer >= 0)
 	{
 		sem_.AddChild(variable, built_initializer);

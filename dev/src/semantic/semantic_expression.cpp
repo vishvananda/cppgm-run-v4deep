@@ -1511,7 +1511,7 @@ Analyzer::Resolved Analyzer::SemAssignment(int node, int scope)
 		}
 	}
 	Resolved result;
-	result.type = left.type;
+	result.type = ReferredType(left.type);
 	result.category = kLvalue;
 	result.node = sem_.Add("assignment-expression", result.category,
 	                       Spell(result.type), Label(node));
@@ -2324,7 +2324,14 @@ string Analyzer::Spell(int id) const
 		       (qualified.empty() ? type.name : qualified);
 	}
 	case kTypeEnum:
-		return string(EnumKeyWord(type.enum_key)) + " " + type.name;
+	{
+		// An enumeration prints its own name, so a qualified definition of a
+		// member enumeration reads as the enumeration rather than its path.
+		const size_t split = type.name.rfind("::");
+		const string name = split == string::npos ? type.name
+		                                          : type.name.substr(split + 2);
+		return string(EnumKeyWord(type.enum_key)) + " " + name;
+	}
 	case kTypeTemplateParameter:
 		return string(type.class_key != 0 ? "template-parameter " : "typename ") + type.name;
 	case kTypeCv:
