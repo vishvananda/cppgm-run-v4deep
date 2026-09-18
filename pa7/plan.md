@@ -239,7 +239,7 @@ harness, and each is a reading the standard and the reference agree on:
   ledger recorded as the stage's largest, and the audit fixed it rather than
   carrying it further.  The PA7 walk resolves names against the finished
   analysis, so it saw every declaration in a scope; the reference resolves at
-  the use, so it rejects a forward use (3.3.1).  Six reduced reproducers now
+  the use, so it rejects a forward use (3.3.1).  Nine reduced reproducers now
   pin the rule in `student.tests/semantics_differential.pl` - a later function,
   a later overload, a later qualifier, a later initializer target, a later
   using-declaration and a later using-directive are each rejected, and
@@ -350,7 +350,7 @@ There is no executable benchmark to review here, and none is invented.
 - `student.tests/semantics_differential.pl` - **75** curated reduced
   reproducers agree with the reference in exit status and dump: the conversion,
   ranking, value-category, naming, statement-scope and rejection corners, the
-  function-template corners, and the ten point-of-declaration readings the audit
+  function-template corners, and the nine point-of-declaration readings the audit
   added.
 - `dev/src/semantic/*.cpp` compile with no warning under `-Wall -Wextra`.
 - The two architecture traces below were run on the audit commit and their dumps
@@ -505,17 +505,33 @@ reading the stage chose where the handout does not pin the behaviour.
    and a deferred member body or an implicit constructor both appear the order
    between them is not pinned by any fixture; the stage prints the
    instantiations last.
+7. **The resolved tree holds rendered text per node.**  A `SemNode` carries
+   four `std::string` members - the tag, the value category, the resolved type
+   spelling and the trailing label - plus a `std::vector<int>` of children, so a
+   node with children costs one allocation for that vector and a heap block for
+   every member that exceeds the small-string buffer, of which the type
+   spelling always does.  The tree is the stage's *output* rather than a node
+   the frontend revisits - it is built once per printed line, 267 094 of them on
+   the frozen corpus, and walked once by the writer - so the audit left it
+   alone: the compiler is already 14.5% faster than the reference on that corpus
+   and uses 11.8% less peak memory, and re-cutting the representation (a type
+   id rendered at write time, interned tags, children as arena edges like the
+   syntax tree's) is a performance change with its own regression risk, not a
+   correctness repair.  A later stage that starts consuming this tree rather
+   than printing it should make that change first.
 
 ### Known differences from the reference
 
 None inside the slice.  The differential harness's curated list holds the
-readings that could have diverged - twenty-one template reproducers and the ten
+readings that could have diverged - twenty-one template reproducers and the nine
 point-of-declaration readings the audit added among them - and every one of them
 agrees in exit status and dump.  The differences the audit found are all in the
 class surface the handout's *Out Of Scope* list names, and they are listed above
 with the reduced reproducer for each.
 
-The audit also swept 46 further reduced probes (forward and backward uses across
+The audit also swept 74 further reduced probes outside the harness - 49 in the
+first sweep and 25 in the second - covering forward and backward uses across
 namespaces, blocks, classes, using-declarations, using-directives, namespace
-aliases, enumerations, templates and initializers) and every one agrees with the
-reference on exit status.
+aliases, enumerations, templates and initializers.  Every one agrees with the
+reference on exit status; every probe that differs in the dump is a class-surface
+item listed above, which the handout puts out of scope.
