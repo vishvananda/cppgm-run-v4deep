@@ -853,25 +853,41 @@ int Analyzer::CompareConversions(const Conversion& a, const Conversion& b) const
 	{
 		return a.temporary ? -1 : 1;
 	}
-	// 13.3.3.2/3: two references to the same type that differ only in top-level
-	// cv-qualification are ranked by which is less qualified.
-	if(a.reference && b.reference)
+	// 13.3.3.2/3: two bindings or pointer conversions to the same type that
+	// differ only in top-level cv-qualification are ranked by which is less
+	// qualified.
+	if(a.reference == b.reference && (a.reference || a.pointer_conversion))
 	{
-		int referred_a = ReferredType(a.target);
-		int referred_b = ReferredType(b.target);
+		int referred_a = a.target;
+		int referred_b = b.target;
+		if(a.reference)
+		{
+			referred_a = ReferredType(referred_a);
+			referred_b = ReferredType(referred_b);
+		}
+		else if(model_.Get(referred_a).kind == kTypePointer &&
+		        model_.Get(referred_b).kind == kTypePointer)
+		{
+			referred_a = model_.Get(referred_a).base;
+			referred_b = model_.Get(referred_b).base;
+		}
+		else
+		{
+			referred_a = -1;
+		}
 		int quals_a = 0;
 		int quals_b = 0;
-		if(model_.Get(referred_a).kind == kTypeCv)
+		if(referred_a >= 0 && model_.Get(referred_a).kind == kTypeCv)
 		{
 			quals_a = model_.Get(referred_a).quals;
 			referred_a = model_.Get(referred_a).base;
 		}
-		if(model_.Get(referred_b).kind == kTypeCv)
+		if(referred_b >= 0 && model_.Get(referred_b).kind == kTypeCv)
 		{
 			quals_b = model_.Get(referred_b).quals;
 			referred_b = model_.Get(referred_b).base;
 		}
-		if(referred_a == referred_b && quals_a != quals_b)
+		if(referred_a >= 0 && referred_a == referred_b && quals_a != quals_b)
 		{
 			return quals_a < quals_b ? 1 : -1;
 		}
