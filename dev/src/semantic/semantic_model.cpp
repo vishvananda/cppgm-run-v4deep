@@ -121,13 +121,13 @@ Model::Model()
 	global_ = NewScope(kScopeNamespace, "<global>", -1);
 }
 
-int Model::AddType(const Type& type)
+int Model::AddType(const Type& type) const
 {
 	types_.push_back(type);
 	return static_cast<int>(types_.size()) - 1;
 }
 
-int Model::InternType(const string& key, const Type& type)
+int Model::InternType(const string& key, const Type& type) const
 {
 	map<string, int>::const_iterator found = type_ids_.find(key);
 	if(found != type_ids_.end())
@@ -139,7 +139,7 @@ int Model::InternType(const string& key, const Type& type)
 	return id;
 }
 
-int Model::Fundamental(int index)
+int Model::Fundamental(int index) const
 {
 	Type type;
 	type.kind = kTypeFundamental;
@@ -147,7 +147,7 @@ int Model::Fundamental(int index)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::Qualified(int quals, int base)
+int Model::Qualified(int quals, int base) const
 {
 	if(quals == 0)
 	{
@@ -184,7 +184,7 @@ int Model::Qualified(int quals, int base)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::Pointer(int base)
+int Model::Pointer(int base) const
 {
 	Type type;
 	type.kind = kTypePointer;
@@ -192,7 +192,7 @@ int Model::Pointer(int base)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::LvalueReference(int base)
+int Model::LvalueReference(int base) const
 {
 	if(Get(base).kind == kTypeLvalueReference)
 	{
@@ -208,7 +208,7 @@ int Model::LvalueReference(int base)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::RvalueReference(int base)
+int Model::RvalueReference(int base) const
 {
 	if(Get(base).kind == kTypeLvalueReference || Get(base).kind == kTypeRvalueReference)
 	{
@@ -220,7 +220,7 @@ int Model::RvalueReference(int base)
 	return InternType(StructuralKey(type), type);
 }
 
-int Model::Array(long long bound, int element)
+int Model::Array(long long bound, int element) const
 {
 	// 8.3.4/1: the element type of an array shall not be `void`, a reference or
 	// a function type, so the invariant is enforced where an array is formed.
@@ -240,7 +240,7 @@ int Model::Array(long long bound, int element)
 }
 
 int Model::Function(int result, const vector<int>& params, bool varargs, int quals,
-                    int func_ref)
+                    int func_ref) const
 {
 	Type type;
 	type.kind = kTypeFunction;
@@ -254,7 +254,7 @@ int Model::Function(int result, const vector<int>& params, bool varargs, int qua
 
 // 8.3.3: a pointer to member is a distinct type from any pointer, so `int C::*`
 // and `int*` are never the same type however the class is laid out.
-int Model::MemberPointer(int class_type, int member_type)
+int Model::MemberPointer(int class_type, int member_type) const
 {
 	Type type;
 	type.kind = kTypeMemberPointer;
@@ -402,7 +402,7 @@ bool Model::DerivesFrom(int derived, int base) const
 
 // 8.3.5/5: a parameter's array or function type adjusts to a pointer, and a
 // top-level cv qualifier is removed, before two declarations are compared.
-int Model::AdjustParameter(int id)
+int Model::AdjustParameter(int id) const
 {
 	const Type& type = Get(id);
 	if(type.kind == kTypeArray)

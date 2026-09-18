@@ -311,18 +311,18 @@ public:
 	Model();
 
 	// --- types ----------------------------------------------------------
-	int Fundamental(int index);
-	int Qualified(int quals, int base);
-	int Pointer(int base);
-	int LvalueReference(int base);
-	int RvalueReference(int base);
-	int Array(long long bound, int element);
+	int Fundamental(int index) const;
+	int Qualified(int quals, int base) const;
+	int Pointer(int base) const;
+	int LvalueReference(int base) const;
+	int RvalueReference(int base) const;
+	int Array(long long bound, int element) const;
 	int Function(int result, const std::vector<int>& params, bool varargs,
-	             int quals = 0, int func_ref = 0);
+	             int quals = 0, int func_ref = 0) const;
 	int NewClass(const std::string& name, int key);
 	int NewEnum(const std::string& name, int key);
 	int NewTemplateParameter(const std::string& name, bool template_parameter);
-	int MemberPointer(int class_type, int member_type);
+	int MemberPointer(int class_type, int member_type) const;
 
 	const Type& Get(int id) const
 	{
@@ -358,7 +358,7 @@ public:
 
 	// 8.3.5/5: the type a parameter takes in a signature, which is what makes
 	// `void f(int)` and `void f(int[3])` one function.
-	int AdjustParameter(int id);
+	int AdjustParameter(int id) const;
 
 	// The size and alignment of a type in the course ABI, for `sizeof` and
 	// `alignof`.  An incomplete class or an unknown array bound has no size.
@@ -525,15 +525,15 @@ public:
 	bool DerivesFrom(int derived, int base) const;
 
 private:
-	int InternType(const std::string& key, const Type& type);
-	int AddType(const Type& type);
+	int InternType(const std::string& key, const Type& type) const;
+	int AddType(const Type& type) const;
 	void CollectNominations(int scope, std::vector<int>& out) const;
 	int LookupInCategory(int scope, const std::string& name, int category) const;
 	int LookupThrough(int scope, const std::string& name, int category,
 	                  std::vector<int>& visited) const;
 
-	std::vector<Type> types_;
-	std::map<std::string, int> type_ids_;
+	mutable std::vector<Type> types_;
+	mutable std::map<std::string, int> type_ids_;
 	std::vector<Scope> scopes_;
 	std::vector<Entity> entities_;
 	std::map<int, int> node_scopes_;

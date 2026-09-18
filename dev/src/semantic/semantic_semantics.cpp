@@ -311,8 +311,11 @@ int Analyzer::SemVariable(int scope, const string& name, int entity, int type,
                           int initializer, bool is_constexpr)
 {
 	const int variable = sem_.Add("variable", name, true);
-	sem_.SetType(variable, Spell(type));
-	const int built = SemInitializer(initializer, scope, type, name, entity, is_constexpr);
+	int declared = type;
+	const int built = SemInitializer(initializer, scope, declared, name, entity, is_constexpr);
+	// 8.3.4/3: an initialiser completes an array of unknown bound, and the
+	// declaration line prints the completed type.
+	sem_.SetType(variable, Spell(declared));
 	if(built >= 0)
 	{
 		sem_.AddChild(variable, built);
@@ -323,7 +326,7 @@ int Analyzer::SemVariable(int scope, const string& name, int entity, int type,
 // The value a declaration gives its object: an initializer, a braced list, a
 // direct-initialisation, or - for a class with none - the constructor an object
 // of that type needs (8.5/6).
-int Analyzer::SemInitializer(int node, int scope, int type, const string& name, int entity,
+int Analyzer::SemInitializer(int node, int scope, int& type, const string& name, int entity,
                              bool is_constexpr)
 {
 	const int plain = ReferredType(type);
@@ -641,7 +644,7 @@ int Analyzer::SemStatement(int node, int scope)
 		const int child = ChildAt(node, 0);
 		if(child >= 0)
 		{
-			const Resolved value = SemExpr(child, scope);
+			Resolved value = SemExpr(child, scope);
 			if(return_is_void_)
 			{
 				throw SemanticError("a value cannot be returned from a void function");
@@ -649,6 +652,10 @@ int Analyzer::SemStatement(int node, int scope)
 			if(Convert(value, ReferredType(return_type_), scope).rank == 0)
 			{
 				throw SemanticError("the returned value does not convert to the return type");
+			}
+			if(value.null_zero && NullPointerTarget(ReferredType(return_type_)) >= 0)
+			{
+				sem_.SetType(value.node, Spell(ReferredType(return_type_)));
 			}
 			sem_.AddChild(built, value.node);
 		}
@@ -853,7 +860,8 @@ int Analyzer::SemCondition(int node, int scope, bool switch_context)
 	}
 	const int variable = sem_.Add("variable", name, true);
 	sem_.SetType(variable, Spell(fact->type));
-	const int built_initializer = SemInitializer(initializer, scope, fact->type, name,
+	int declared = fact->type;
+	const int built_initializer = SemInitializer(initializer, scope, declared, name,
 	                                             fact->entity, false);
 	if(built_initializer >= 0)
 	{

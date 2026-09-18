@@ -2258,6 +2258,15 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 			throw SemanticError("`static_cast` cannot perform this conversion");
 		}
 	}
+	if(IsReferenceType(target))
+	{
+		// 5.2.9/4: a cast to a reference type denotes the operand itself with
+		// the reference's type, which is how the dump shows an xvalue cast.
+		sem_.SetType(operand.node, Spell(result.type));
+		sem_.SetCategory(operand.node, result.category);
+		result.node = operand.node;
+		return result;
+	}
 	result.node = sem_.Add("cast-expression", result.category, Spell(result.type),
 	                       label);
 	sem_.AddChild(result.node, operand.node);
@@ -2363,7 +2372,8 @@ string Analyzer::Spell(int id) const
 			{
 				text += ", ";
 			}
-			text += Spell(type.params[index]);
+			// 8.3.5/5: the signature is the adjusted parameter-type-list.
+			text += Spell(model_.AdjustParameter(type.params[index]));
 		}
 		if(type.varargs)
 		{

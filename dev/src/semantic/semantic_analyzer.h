@@ -300,7 +300,7 @@ private:
 	int SemTemplateDeclaration(int node, int scope);
 	void SemLinkageSpecification(int node, int scope, std::vector<int>& out);
 	int SemMemberPointerTarget(int node, int scope);
-	int SemInitializer(int node, int scope, int type, const std::string& name,
+	int SemInitializer(int node, int scope, int& type, const std::string& name,
 	                   int entity, bool is_constexpr);
 	int SemVariable(int scope, const std::string& name, int entity, int type,
 	                int initializer, bool is_constexpr);

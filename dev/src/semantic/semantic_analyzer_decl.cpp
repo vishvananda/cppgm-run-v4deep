@@ -519,7 +519,12 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 		const string& child_tag = Tag(child);
 		if(child_tag == "ptr-operator")
 		{
-			const string spelling = TerminalWord(Label(child));
+			// A `C::*` operator is labelled with the source text it spans, while
+			// `*`, `&` and `&&` are labelled with their token kind, so only the
+			// latter go through the kind prefix.
+			const string& raw = Label(child);
+			const string spelling = raw.compare(0, 3, "OP_") == 0
+			    ? TerminalWord(raw) : raw;
 			int kind = kTypePointer;
 			if(spelling == "&")
 			{
