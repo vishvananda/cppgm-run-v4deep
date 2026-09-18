@@ -262,6 +262,7 @@ private:
 		bool pointer_conversion;
 		bool boolean_conversion;
 		bool proper_subsequence;
+		bool temporary;       // the reference bound a converted temporary
 		int target;
 
 		Conversion()
@@ -274,6 +275,7 @@ private:
 			, pointer_conversion(false)
 			, boolean_conversion(false)
 			, proper_subsequence(false)
+			, temporary(false)
 			, target(-1)
 		{}
 	};

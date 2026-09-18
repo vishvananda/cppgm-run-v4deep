@@ -530,16 +530,13 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		}
 		// 13.3.3.1.4: an argument that is not reference-compatible is first
 		// converted to the referred type, and the reference binds the result.
-		// The result is a prvalue, so only a reference that may bind one is
-		// viable.
-		const int referred = model_.Get(parameter.base).kind == kTypeCv
-		    ? model_.Get(parameter.base).base : parameter.base;
-		const bool bindable = result.rvalue_reference ||
-		    (model_.Get(parameter.base).kind == kTypeCv);
-		if(!bindable)
+		// The result is a prvalue, so only a reference to a cv-qualified type
+		// may bind it, and the binding is to a temporary.
+		if(model_.Get(parameter.base).kind != kTypeCv)
 		{
 			return result;
 		}
+		const int referred = model_.Get(parameter.base).base;
 		Conversion inner = Convert(from, referred, scope);
 		if(inner.rank == 0)
 		{
@@ -550,6 +547,7 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		result.pointer_conversion = inner.pointer_conversion;
 		result.proper_subsequence = inner.proper_subsequence;
 		result.bound_to_lvalue = false;
+		result.temporary = true;
 		result.lvalue_to_rvalue = true;
 		return result;
 	}
@@ -791,6 +789,12 @@ int Analyzer::CompareConversions(const Conversion& a, const Conversion& b) const
 		{
 			return -1;
 		}
+	}
+	// 13.3.3.2/3: a reference that binds the argument itself is better than one
+	// that binds a temporary converted from it.
+	if(a.reference && b.reference && a.temporary != b.temporary)
+	{
+		return a.temporary ? -1 : 1;
 	}
 	if(a.proper_subsequence != b.proper_subsequence)
 	{
