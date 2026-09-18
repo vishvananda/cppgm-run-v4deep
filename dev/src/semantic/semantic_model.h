@@ -430,6 +430,13 @@ public:
 	int LookupValueUnqualified(int scope, const std::string& name) const;
 	int LookupNamespaceUnqualified(int scope, const std::string& name) const;
 
+	// The first component of a nested-name-specifier.  3.4.3.1/1 with 7.3.4/3:
+	// the names a using-directive nominates are considered only where the
+	// enclosing scopes declare nothing of that spelling, so the nearest
+	// enclosing declaration wins.
+	int LookupTypeQualifier(int scope, const std::string& name) const;
+	int LookupNamespaceQualifier(int scope, const std::string& name) const;
+
 	// Qualified lookup: `scope` is the scope named by the qualifier.
 	int LookupTypeIn(int scope, const std::string& name) const;
 	int LookupValueIn(int scope, const std::string& name) const;
@@ -531,6 +538,8 @@ private:
 	int LookupInCategory(int scope, const std::string& name, int category) const;
 	int LookupThrough(int scope, const std::string& name, int category,
 	                  std::vector<int>& visited) const;
+	int LookupThroughDirect(int scope, const std::string& name, int category,
+	                        std::vector<int>& visited) const;
 
 	mutable std::vector<Type> types_;
 	mutable std::map<std::string, int> type_ids_;

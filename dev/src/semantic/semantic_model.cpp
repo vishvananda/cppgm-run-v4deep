@@ -848,6 +848,75 @@ int Model::LookupNamespace(int scope, const string& name) const
 	return LookupInCategory(scope, name, kLookupNamespace);
 }
 
+// The same walk as `LookupThrough` without the using-directive nominations:
+// what the enclosing scopes themselves declare, and what their inline
+// namespaces do.
+int Model::LookupThroughDirect(int scope, const string& name, int category,
+                               vector<int>& visited) const
+{
+	for(size_t index = 0; index < visited.size(); ++index)
+	{
+		if(visited[index] == scope)
+		{
+			return -1;
+		}
+	}
+	visited.push_back(scope);
+
+	const int direct = LookupInCategory(scope, name, category);
+	if(direct >= 0)
+	{
+		return direct;
+	}
+	const Scope& record = ScopeOf(scope);
+	if(record.unnamed && record.parent >= 0)
+	{
+		const int inherited = LookupThroughDirect(record.parent, name, category, visited);
+		if(inherited >= 0)
+		{
+			return inherited;
+		}
+	}
+	for(size_t index = 0; index < record.inline_namespaces.size(); ++index)
+	{
+		const int found = LookupThroughDirect(record.inline_namespaces[index], name, category,
+		                                      visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
+}
+
+int Model::LookupTypeQualifier(int scope, const string& name) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		vector<int> visited;
+		const int found = LookupThroughDirect(current, name, kLookupType, visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return LookupTypeUnqualified(scope, name);
+}
+
+int Model::LookupNamespaceQualifier(int scope, const string& name) const
+{
+	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
+	{
+		vector<int> visited;
+		const int found = LookupThroughDirect(current, name, kLookupNamespace, visited);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return LookupNamespaceUnqualified(scope, name);
+}
+
 int Model::LookupTypeUnqualified(int scope, const string& name) const
 {
 	for(int current = scope; current >= 0; current = ScopeOf(current).parent)
@@ -937,7 +1006,7 @@ int Model::ResolveQualifier(int scope, const string& qualifier) const
 		// namespace-only context must not be answered by a value or a class of
 		// the same spelling (3.4.3).
 		const int found = current < 0
-		    ? LookupNamespaceUnqualified(base, component)
+		    ? LookupNamespaceQualifier(base, component)
 		    : LookupNamespaceIn(base, component);
 		if(found >= 0)
 		{
@@ -945,7 +1014,7 @@ int Model::ResolveQualifier(int scope, const string& qualifier) const
 			continue;
 		}
 		const int entity = current < 0
-		    ? LookupTypeUnqualified(base, component)
+		    ? LookupTypeQualifier(base, component)
 		    : LookupTypeIn(base, component);
 		if(entity < 0)
 		{
