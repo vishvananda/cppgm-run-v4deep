@@ -8,7 +8,9 @@
 - Implementation commits: `f303ce5d` (the resolved-semantics layer, the tree,
   the dump and the driver), then the conversion, naming, statement and
   reference-binding increments listed under "Findings, changes and evidence",
-  then `edd6cbe8` (the function-template slice).
+  then `edd6cbe8` (the function-template slice) and the four corrections the
+  slice's own probing found (`21fae408`, `23374e43`, `36a66bec` and the record
+  commit).
 - Target: `cppgm++ --emit-semantics -o <out> <src>...` runs translation phases
   1-7, the PA5 parse, the PA6 scope/type analysis, resolves expressions,
   statements, calls, conversions and the limited overload set, and writes the
@@ -16,7 +18,7 @@
 - Progress: **186 / 186** checked-in PA7 tests pass; `make
   test-report-through-pa6` passes 498 / 498; `perl
   scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` reports no issue; the
-  personal differential harness agrees with the reference on 58 curated
+  personal differential harness agrees with the reference on 66 curated
   reproducers; the personal benchmark's dumps are byte-identical to the
   reference.
 
@@ -183,6 +185,14 @@ harness, and each is a reading the standard and the reference agree on:
   so a later evaluated demand is the one that instantiates it - which is what
   `student.tests/semantics_differential.pl`'s
   `a-later-demand-instantiates-what-sizeof-skipped` pins.
+- **Deduction keeps or drops an argument's cv the way 14.8.2 says.**  The
+  adjustment belongs at the top of the match and nowhere below it: the
+  argument's top-level cv is ignored only where the parameter is not a
+  reference, so `f(T)` takes a `const int` as `int` while `f(T&)` and `f(T*)`
+  take it as `const int`; a cv-qualified parameter or pointee absorbs it, so
+  `f(const T&)` and `f(const T*)` take it as `int` again.  Each of the five
+  readings was checked against `g++ -std=c++11` before the reference was asked,
+  and six reproducers pin them.
 
 ## Performance evidence
 
@@ -200,32 +210,33 @@ invented.
 
 Frozen protocol, 3 000 groups (1 286 528 B of source, a 12 200 816 B dump of
 267 094 resolved nodes), 5 ABBA blocks, 20 timed runs per label, dumps compared
-byte for byte before any timing is accepted.  Re-measured on `edd6cbe8`, the
-template slice's commit:
+byte for byte before any timing is accepted.  Measured on `23374e43`, after the
+template slice:
 
 | tool | latency (s) | peak RSS (MB) |
 | --- | --- | --- |
-| `cppgm++-ref` | 1.306 [1.298..1.450] | 147.8 [147.7..148.0] |
-| `cppgm++` | 0.895 [0.877..0.961] | 129.7 [129.3..129.9] |
+| `cppgm++-ref` | 1.308 [1.290..1.319] | 147.9 [147.7..148.0] |
+| `cppgm++` | 0.887 [0.880..1.091] | 129.7 [129.3..129.9] |
 
-Paired difference (mine - ref): median -0.4058 s, 5 of 5 blocks negative, MAD
-0.0093 s, range [-0.4150..-0.3440].  A/A calibration on the same schedule:
-paired difference median +0.0023 s, 2 of 5 blocks negative, MAD 0.0048 s,
-range [-0.0150..+0.0071].  The latency effect is 85x the noise floor.  Every
-observation is kept in
+Paired difference (mine - ref): median -0.4211 s, 5 of 5 blocks negative, MAD
+0.0177 s, range [-0.4387..-0.2120].  A/A calibration on the same schedule:
+paired difference median +0.1036 s, 0 of 5 blocks negative, MAD 0.0104 s,
+range [+0.0075..+0.1217].  The A/A arm took an excursion on this run - its
+range is 12x its own MAD - so the honest noise floor is the MAD, and the
+latency effect is 40x it.  Every observation is kept in
 `/tmp/pa7_semantics_benchmark/semantics_benchmark.tsv`.  The dump is
 byte-identical to the reference, so the latency difference is the compiler's
 own work and not a different output.
 
 The scaling is linear in the declarations and the expressions they hold,
-measured from outside on the same corpus generator:
+measured from outside on the same corpus generator, on the same commit:
 
 | groups | source bytes | latency (s) | peak RSS (MB) |
 | --- | --- | --- | --- |
-| 500 | 214 527 | 0.155 | 22.9 |
-| 1 000 | 428 528 | 0.293 | 41.4 |
-| 2 000 | 857 528 | 0.586 | 78.3 |
-| 4 000 | 1 715 528 | 1.171 | 150.9 |
+| 500 | 214 527 | 0.155 | 23.1 |
+| 1 000 | 428 528 | 0.296 | 41.6 |
+| 2 000 | 857 528 | 0.584 | 78.0 |
+| 4 000 | 1 715 528 | 1.171 | 150.8 |
 
 Doubling the input doubles both, which is what "semantic work tracks actual
 declarations, lookup candidates and demanded specialization facts" means.  No
@@ -241,7 +252,7 @@ compiler-work budget to justify and none is claimed.
   files checked, 2 warnings about the two headers' inline bodies).
 - `student.tests/semantics_benchmark.pl` - dumps byte-identical to the
   reference; latency and peak RSS reported above.
-- `student.tests/semantics_differential.pl` - 61 curated reduced reproducers of
+- `student.tests/semantics_differential.pl` - 66 curated reduced reproducers of
   the conversion, ranking, value-category, naming, statement-scope, template
   and rejection corners agree with the reference in exit status and dump.
 - `dev/src/semantic/*.cpp` compile clean under `-Wall -Wextra`.
@@ -346,5 +357,5 @@ reading the stage chose where the handout does not pin the behaviour.
 ### Known differences from the reference
 
 None inside the slice.  The differential harness's curated list holds the
-readings that could have diverged - now including sixteen template
+readings that could have diverged - now including twenty-one template
 reproducers - and every one of them agrees in exit status and dump.
