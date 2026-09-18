@@ -389,13 +389,18 @@ int Analyzer::SemInitializer(int node, int scope, int& type, const string& name,
 		return -1;
 	}
 	Resolved value = SemExpr(child, scope);
-	if(value.null_zero && NullPointerTarget(ReferredType(type)) >= 0)
+	int plain_target = ReferredType(type);
+	if(model_.Get(plain_target).kind == kTypeCv)
+	{
+		plain_target = model_.Get(plain_target).base;
+	}
+	if(value.null_zero && NullPointerTarget(plain_target) >= 0)
 	{
 		// 4.10/1: an integer literal zero that initialises a pointer prints as
 		// the pointer it converted to.
-		sem_.SetType(value.node, Spell(ReferredType(type)));
+		sem_.SetType(value.node, Spell(plain_target));
 	}
-	if(is_constexpr && !value.null_zero)
+	else if(is_constexpr)
 	{
 		// A constant object's initialiser is folded, so the literal carries the
 		// type the object was declared with.
@@ -482,7 +487,8 @@ void Analyzer::SemanticsImplicitBodies()
 	// unit's own declarations, which is where the reference puts it.
 	for(size_t index = 0; index < deferred_bodies_.size(); ++index)
 	{
-		const int definition = SemFunctionDefinition(0, 0, deferred_bodies_[index]);
+		const int definition = SemFunctionDefinition(0, 0, deferred_bodies_[index].first,
+		                                             deferred_bodies_[index].second);
 		if(definition >= 0)
 		{
 			sem_.AddChild(sem_root_, definition);
@@ -505,19 +511,12 @@ void Analyzer::SemanticsImplicitBodies()
 	}
 }
 
-int Analyzer::SemFunctionDefinition(int node, int scope, int declarator)
+int Analyzer::SemFunctionDefinition(int node, int scope, int declarator, int body)
 {
 	(void)scope;
-	int body = -1;
 	if(declarator < 0)
 	{
 		declarator = FindChild(node, "declarator");
-		body = FindChild(node, "compound-statement");
-	}
-	else
-	{
-		// A deferred member body is reached by its declarator, and the body is
-		// the one the class's member list held for it.
 		body = FindChild(node, "compound-statement");
 	}
 	const Model::DeclarationFact* fact = model_.DeclarationAt(declarator);
