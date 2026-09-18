@@ -59,6 +59,14 @@ void Analyzer::BuildSemantics(int root)
 		}
 	}
 	SemanticsImplicitBodies();
+	// 14.7.1: an instantiation is a declaration of the translation unit, and
+	// the dump prints it after the declarations the source wrote.
+	vector<int> instantiations;
+	SemInstantiations(instantiations);
+	for(size_t index = 0; index < instantiations.size(); ++index)
+	{
+		sem_.AddChild(sem_root_, instantiations[index]);
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -135,6 +135,7 @@ private:
 	void AnalyzeAliasDeclaration(int node, int scope);
 	void AnalyzeStaticAssert(int node, int scope);
 	void AnalyzeTemplateDeclaration(int node, int scope, int enclosing_class);
+	int TemplatedDeclarator(int declaration) const;
 	void AnalyzeLinkageSpecification(int node, int scope, int enclosing_class);
 	void AnalyzeClassForward(int node, int scope);
 	void AnalyzeBitField(int node, int scope);
@@ -282,17 +283,25 @@ private:
 		{}
 	};
 
-	// A function the call layer is choosing between.
+	// A function the call layer is choosing between.  A candidate a template
+	// produced is still only *substituted*: 14.7.1 instantiates the
+	// specialization the program uses, so `which` names the template and the
+	// bindings it stands for, and the instantiation happens once the ranking
+	// has picked it.
 	struct Candidate
 	{
 		int entity;
 		int type;   // the function's declared type
 		int scope;  // the scope the declaration was found in
 
+		int which;                    // the template this candidate substitutes, or -1
+		std::map<int, int> bindings;  // the substitution it stands for
+
 		Candidate()
 			: entity(-1)
 			, type(-1)
 			, scope(-1)
+			, which(-1)
 		{}
 	};
 
@@ -324,7 +333,7 @@ private:
 	Resolved SemExpr(int node, int scope, int target = -1);
 	Resolved SemLiteral(int node, int scope);
 	Resolved SemKeywordLiteral(int node, int scope);
-	Resolved SemIdExpression(int node, int scope);
+	Resolved SemIdExpression(int node, int scope, int target = -1);
 	Resolved SemUnary(int node, int scope, int target);
 	Resolved SemPostfix(int node, int scope);
 	Resolved SemBinary(int node, int scope);
@@ -351,6 +360,60 @@ private:
 	Resolved SemNamedCall(int node, int scope, const std::string& text,
 	                      const std::vector<Candidate>& candidates,
 	                      const std::vector<Resolved>& arguments);
+
+	// --- function templates -----------------------------------------------
+	// 14.1: a function template the unit declared.  The name is declared in the
+	// enclosing scope (14.1/2), so a template-id is looked up there, and the
+	// declaration's own type mentions the template parameters, so an
+	// instantiation substitutes an argument for each of them.
+	struct FunctionTemplate
+	{
+		int scope;                    // the scope the name is declared in
+		std::string name;             // the declared name, unqualified
+		std::vector<int> parameters;  // the template parameter types, in order
+		int entity;                   // the entity the declaration bound
+		int type;                     // the declared function type
+		int declarator;               // the declarator, whose clause names them
+
+		FunctionTemplate()
+			: scope(-1)
+			, entity(-1)
+			, type(-1)
+			, declarator(-1)
+		{}
+	};
+
+	// One instantiation the walk demanded, in the order it first needed one.
+	struct Instantiation
+	{
+		int which;   // the index into `templates_`
+		int entity;  // the function the substitution declared
+	};
+
+	void NoteFunctionTemplate(int scope, const std::string& name,
+	                          const std::vector<int>& parameters, int entity, int type,
+	                          int declarator);
+	bool FindFunctionTemplates(int scope, const std::string& name,
+	                           std::vector<int>& out) const;
+	int InstantiateFunctionTemplate(int which, const std::map<int, int>& bindings);
+	int SubstituteType(int type, const std::map<int, int>& bindings) const;
+	bool DeduceArguments(int declared, int actual, std::map<int, int>& bindings) const;
+	bool SplitTemplateId(const std::string& text, std::string& name,
+	                     std::vector<std::string>& arguments) const;
+	int ResolveTemplateArgument(int scope, const std::string& text);
+	Resolved SemTemplateId(int node, int scope, const std::string& name,
+	                       const std::vector<std::string>& arguments, int target);
+	Resolved SemTemplateCall(int node, int scope, const std::string& text,
+	                         const std::vector<int>& found,
+	                         const std::vector<Resolved>& arguments);
+	Resolved SemExplicitTemplateCall(int node, int scope, const std::string& name,
+	                                 const std::vector<std::string>& arguments,
+	                                 const std::vector<int>& found,
+	                                 const std::vector<Resolved>& call_arguments);
+	// The entity a chosen candidate denotes, instantiating it if the ranking
+	// has just picked a template's specialization.
+	int CandidateEntity(Candidate& candidate);
+	void SemInstantiations(std::vector<int>& out);
 
 	// --- conversions and overload resolution ------------------------------
 	Conversion Convert(const Resolved& from, int target, int scope);
@@ -416,6 +479,14 @@ private:
 	// created.  Both are per translation unit, like the model.
 	std::vector<int> implicit_classes_;
 	std::map<int, int> implicit_ctors_;
+
+	// The function templates the unit declared, the instantiations the walk
+	// demanded in the order it demanded them, and the specialization each
+	// (template, substituted type) pair already produced.  All three are per
+	// translation unit, like the model.
+	std::vector<FunctionTemplate> templates_;
+	std::vector<Instantiation> instantiations_;
+	std::map<std::pair<int, int>, int> specializations_;
 };
 
 }  // namespace semantic

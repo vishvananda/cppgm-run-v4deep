@@ -394,6 +394,7 @@ void Analyzer::AnalyzeStaticAssert(int node, int scope)
 void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_class)
 {
 	const int parameters = model_.NewScope(kScopeTemplateParameters, "", scope);
+	vector<int> parameter_types;
 	const int clause = FindChild(node, "template-parameter-clause");
 	if(clause >= 0)
 	{
@@ -422,10 +423,12 @@ void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_cla
 				const int entity = model_.NewEntity(kEntityTemplateParameter, name);
 				model_.EntityOf(entity).type = type;
 				AddTypeBinding(parameters, name, entity, -1, -1);
+				parameter_types.push_back(type);
 			}
 		}
 	}
 	const vector<int> children = ChildrenOf(node);
+	int declaration = -1;
 	for(size_t index = 0; index < children.size(); ++index)
 	{
 		const int child = children[index];
@@ -434,7 +437,50 @@ void Analyzer::AnalyzeTemplateDeclaration(int node, int scope, int enclosing_cla
 			continue;
 		}
 		AnalyzeDeclaration(child, parameters, enclosing_class);
+		declaration = child;
 	}
+	// 14.1: a function template's name belongs to the enclosing scope, so the
+	// registry records it there.  A template whose declaration declares
+	// something other than one function - a class, an object, an alias - is not
+	// a function template and is not registered.
+	const int declarator = TemplatedDeclarator(declaration);
+	const Model::DeclarationFact* fact = model_.DeclarationAt(declarator);
+	if(fact == 0 || fact->entity < 0 ||
+	   model_.EntityOf(fact->entity).kind != kEntityFunction)
+	{
+		return;
+	}
+	string written;
+	CollectDeclaratorName(declarator, written);
+	string qualifier;
+	string name;
+	SplitQualifiedName(written, qualifier, name);
+	int where = scope;
+	if(!qualifier.empty())
+	{
+		where = model_.ResolveQualifier(scope, qualifier);
+	}
+	NoteFunctionTemplate(where, name, parameter_types, fact->entity, fact->type, declarator);
+}
+
+// The declarator a templated declaration declares with, whether it is written
+// as a simple-declaration or as a definition.
+int Analyzer::TemplatedDeclarator(int declaration) const
+{
+	if(declaration < 0)
+	{
+		return -1;
+	}
+	if(IsTag(declaration, "function-definition"))
+	{
+		return FindChild(declaration, "declarator");
+	}
+	const int list = FindChild(declaration, "init-declarator-list");
+	if(list < 0 || ChildCount(list) != 1)
+	{
+		return -1;
+	}
+	return ChildAt(ChildAt(list, 0), 0);
 }
 
 void Analyzer::AnalyzeLinkageSpecification(int node, int scope, int enclosing_class)

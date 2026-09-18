@@ -1205,13 +1205,28 @@ Analyzer::Resolved Analyzer::SemKeywordLiteral(int node, int scope)
 
 // The type an object's name prints with: a reference prints the type it refers
 // to, because the name denotes the object rather than the reference.
-Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
+Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope, int target)
 {
 	Resolved result;
 	const string& text = Label(node);
 	const int entity = ResolveValueName(scope, text);
 	if(entity < 0)
 	{
+		// 14.2: a name written with an argument list is a template-id, which
+		// denotes the specialization the arguments name rather than a
+		// declaration ordinary lookup finds.
+		string template_name;
+		vector<string> template_arguments;
+		if(text.find('<') != string::npos &&
+		   SplitTemplateId(text, template_name, template_arguments))
+		{
+			const Resolved specialized = SemTemplateId(node, scope, template_name,
+			                                           template_arguments, target);
+			if(specialized.node >= 0)
+			{
+				return specialized;
+			}
+		}
 		// A name that denotes a type is not an expression; the call layer turns
 		// it into a functional cast where that is what the source wrote.
 		string qualifier;
@@ -1372,7 +1387,9 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope, int target)
 	}
 	else
 	{
-		operand = SemExpr(operand_node, scope);
+		// 13.4: the target type of the address decides which function it
+		// denotes, so it is carried down to a name that denotes several.
+		operand = SemExpr(operand_node, scope, target);
 	}
 	if(op == "&")
 	{
@@ -2146,7 +2163,16 @@ int Analyzer::SemArgumentList(int node, int scope, vector<Resolved>& out)
 	const vector<int> children = ChildrenOf(list);
 	for(size_t index = 0; index < children.size(); ++index)
 	{
-		out.push_back(SemExpr(children[index], scope));
+		Resolved argument = SemExpr(children[index], scope);
+		// 5.2.2/4: an argument is a value, so an expression of type void is not
+		// one whatever the parameter list says.
+		const int type = ReferredType(argument.type);
+		if(model_.Get(type).kind == kTypeFundamental &&
+		   model_.Get(type).base == posttoken::FT_VOID)
+		{
+			throw SemanticError("an argument cannot have type void");
+		}
+		out.push_back(argument);
 	}
 	return list;
 }
@@ -2168,7 +2194,7 @@ Analyzer::Resolved Analyzer::SemExpr(int node, int scope, int target)
 	}
 	if(tag == "id-expression")
 	{
-		return SemIdExpression(node, scope);
+		return SemIdExpression(node, scope, target);
 	}
 	if(tag == "parenthesized-expression")
 	{
@@ -2236,11 +2262,34 @@ Analyzer::Resolved Analyzer::SemCall(int node, int scope)
 		{
 			return SemBuiltinCall(node, scope, text);
 		}
+		// 14.2: a call written with an explicit argument list names the
+		// specializations the arguments give, which the call's own arguments
+		// then rank like any other candidate set.
+		string template_name;
+		vector<string> template_arguments;
+		if(text.find('<') != string::npos &&
+		   SplitTemplateId(text, template_name, template_arguments))
+		{
+			vector<int> explicit_templates;
+			if(FindFunctionTemplates(scope, template_name, explicit_templates))
+			{
+				return SemExplicitTemplateCall(node, scope, template_name,
+				                               template_arguments, explicit_templates,
+				                               arguments);
+			}
+		}
 		vector<Candidate> candidates;
 		CollectCandidates(scope, text, candidates);
 		if(!candidates.empty())
 		{
 			return SemNamedCall(node, scope, text, candidates, arguments);
+		}
+		// 14.8.2: a name that denotes function templates has no candidate of
+		// its own until the argument types deduce one.
+		vector<int> templates;
+		if(FindFunctionTemplates(scope, text, templates))
+		{
+			return SemTemplateCall(node, scope, text, templates, arguments);
 		}
 		const Resolved callee = SemExpr(callee_node, scope);
 		if(callee.type_name)
@@ -2348,11 +2397,14 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 		throw SemanticError("no matching function for `" + text + "`");
 	}
 
-	const Candidate chosen = viable[static_cast<size_t>(best)].candidate;
+	Candidate chosen = viable[static_cast<size_t>(best)].candidate;
+	// 14.7.1: a candidate a template produced is only instantiated now that the
+	// ranking has picked it.
+	const int entity = CandidateEntity(chosen);
 	const Type function = model_.Get(chosen.type);
 	Resolved result;
 	result.type = function.base;
-	result.function = chosen.entity;
+	result.function = entity;
 	if(model_.Get(result.type).kind == kTypeLvalueReference)
 	{
 		result.category = kLvalue;
@@ -2366,7 +2418,7 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 		result.category = kPrvalue;
 	}
 	result.node = sem_.Add("call-expression", result.category, Spell(result.type));
-	const int callee = sem_.Add("callee", QualifiedEntityName(chosen.entity), true);
+	const int callee = sem_.Add("callee", QualifiedEntityName(entity), true);
 	sem_.SetType(callee, BoundSpelling(chosen.type, chosen.scope));
 	sem_.AddChild(result.node, callee);
 	for(size_t index = 0; index < arguments.size(); ++index)

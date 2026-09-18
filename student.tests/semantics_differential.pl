@@ -212,6 +212,69 @@ SRC
 int duplicate() { return 1; }
 int duplicate() { return 2; }
 SRC
+	'function-template-id-denotes-a-specialization' => [ '14.2 substitutes the argument for the parameter', <<'SRC' ],
+template<class T> void take(T);
+template<class T> void hello(T);
+struct stream {};
+void use() { take(static_cast<void(*)(stream)>(&hello<stream>)); }
+SRC
+	'target-type-chooses-between-template-parameter-lists' => [ '13.4 picks the specialization the target names', <<'SRC' ],
+template<class T> void take(T);
+template<class T> void hello(T);
+template<class T> void hello(T, int);
+struct stream {};
+void use() { take(static_cast<void(*)(stream)>(&hello<stream>)); }
+SRC
+	'deduced-call-instantiates-from-the-argument-type' => [ '14.8.2 deduces the parameter a call does not write', <<'SRC' ],
+template<class T> void take(T);
+void use() { take(1); take(2); }
+SRC
+	'two-demands-of-one-specialization-are-one-function' => [ '14.7.1 instantiates a specialization once', <<'SRC' ],
+template<class T> void take(T);
+void use() { take(1); take(1); }
+SRC
+	'deduction-binds-each-parameter-from-its-own-argument' => [ '14.8.2.1 matches every parameter in turn', <<'SRC' ],
+template<class T> void take(T, T);
+void use() { take(1, 2); }
+SRC
+	'deduction-through-a-pointer-parameter' => [ '14.8.2.1 deduces through the pointer former', <<'SRC' ],
+template<class T> void take(T*);
+void use() { int value = 0; take(&value); }
+SRC
+	'deduction-decays-an-array-argument' => [ '14.8.2.1 decays the argument before the pointer match', <<'SRC' ],
+template<class T> void take(T*);
+void use() { int values[3]; take(values); }
+SRC
+	'deduction-through-a-reference-parameter' => [ '14.8.2.1 deduces against the referred type', <<'SRC' ],
+template<class T> void take(const T&);
+void use() { take(1); }
+SRC
+	'explicit-template-argument-list-names-a-specialization' => [ '14.3/1 writes the arguments instead of deducing them', <<'SRC' ],
+template<class T> void take(T);
+void use() { take<int>(1); }
+SRC
+	'explicit-template-argument-list-is-ranked-by-the-call' => [ '13.3 ranks the specializations a template-id gives', <<'SRC' ],
+template<class T> void take(T, int);
+template<class T> void take(T);
+void use() { take<int>(1); }
+SRC
+	'qualified-template-name-is-looked-up' => [ '14.2 resolves the qualifier before the template name', <<'SRC' ],
+namespace n { template<class T> void take(T); }
+void use() { n::take(1); }
+SRC
+	'a-void-argument-is-not-a-value' => [ '5.2.2/4 rejects an argument of type void', <<'SRC' ],
+template<class T> void take(T);
+template<class U> void other(U);
+void use() { take(other(1)); }
+SRC
+	'a-parameter-the-call-does-not-deduce-is-not-a-candidate' => [ '14.8.2/5 leaves an undeduced parameter without a type', <<'SRC' ],
+template<class T> void take(T, T);
+void use() { take(1, 2L); }
+SRC
+	'an-explicit-argument-list-must-match-the-parameter-list' => [ '14.3/1 rejects a wrong argument count', <<'SRC' ],
+template<class T> void take(T);
+void use() { take<int, int>(1); }
+SRC
 );
 
 sub run_tool
