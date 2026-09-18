@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -183,7 +184,8 @@ private:
 	int FindOrCreateObject(int scope, const std::string& name, int type);
 	int FindOrCreateFunction(int scope, const std::string& name, int type);
 	void CheckFunctionQualifiers(int scope, int type);
-	void NoteFunctionDefinition(int entity, const std::string& name);
+	void NoteFunctionDefinition(int entity, const std::string& name, int scope, int type);
+	void AnalyzeCondition(int node, int scope);
 
 	// --- constants --------------------------------------------------------
 	Constant Evaluate(int node, int scope);
@@ -379,6 +381,7 @@ private:
 	const syntax::SyntaxArena& arena_;
 	const syntax::SyntaxSpellingPool& spellings_;
 	const std::vector<syntax::SyntaxLiteralFacts>& literals_;
+	std::map<std::pair<int, int>, std::set<std::string> > defined_functions_;
 	std::vector<PendingBody> pending_;
 	long long anonymous_enums_;
 	long long local_classes_;

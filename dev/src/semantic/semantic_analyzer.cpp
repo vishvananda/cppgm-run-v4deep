@@ -250,6 +250,7 @@ void Analyzer::AnalyzeNamespaceDefinition(int node, int scope)
 			list.push_back(target);
 		}
 	}
+	model_.NoteScope(node, target);
 	const vector<int> children = ChildrenOf(node);
 	for(size_t index = 0; index < children.size(); ++index)
 	{

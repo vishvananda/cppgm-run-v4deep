@@ -499,7 +499,26 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		return result;
 	}
 
-	const int source = SourceType(from);
+	int source = SourceType(from);
+	// 4.2 and 4.3: an array and a function decay to a pointer, which is an
+	// lvalue transformation and so still an exact match.
+	bool decayed = false;
+	if(model_.Get(source).kind == kTypeArray)
+	{
+		source = model_.Pointer(model_.Get(source).base);
+		decayed = true;
+	}
+	else if(model_.Get(source).kind == kTypeFunction)
+	{
+		source = model_.Pointer(source);
+		decayed = true;
+	}
+	if(source == target)
+	{
+		result.rank = 4;
+		result.lvalue_to_rvalue = from.category == kLvalue || decayed;
+		return result;
+	}
 	if(model_.Get(source).kind == kTypeClass && model_.Get(target).kind == kTypeClass)
 	{
 		// Copy-initialisation of one class from another is a later assignment's
@@ -510,12 +529,6 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 			result.rank = 4;
 			return result;
 		}
-		return result;
-	}
-	if(source == target)
-	{
-		result.rank = 4;
-		result.lvalue_to_rvalue = from.category == kLvalue;
 		return result;
 	}
 	if(QualificationConvertible(source, target, result.qualification))
@@ -1036,7 +1049,7 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		result.entity = type_entity;
 		return result;
 	}
-	const Entity& record = model_.EntityOf(entity);
+	const Entity record = model_.EntityOf(entity);
 	result.entity = entity;
 	if(record.kind == kEntityEnumerator)
 	{
@@ -1150,13 +1163,22 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 	}
 	else if(op == "*")
 	{
+		// 4.2: an array operand decays to a pointer before the indirection.
 		const int referred = ReferredType(operand.type);
-		if(model_.Get(referred).kind != kTypePointer)
+		if(model_.Get(referred).kind == kTypeArray)
 		{
-			throw SemanticError("the operand of `*` must be a pointer");
+			result.type = model_.Get(referred).base;
+			result.category = kLvalue;
 		}
-		result.type = model_.Get(referred).base;
-		result.category = kLvalue;
+		else
+		{
+			if(model_.Get(referred).kind != kTypePointer)
+			{
+				throw SemanticError("the operand of `*` must be a pointer");
+			}
+			result.type = model_.Get(referred).base;
+			result.category = kLvalue;
+		}
 	}
 	else if(op == "!")
 	{
@@ -1625,7 +1647,7 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	{
 		throw SemanticError("no member `" + name + "`");
 	}
-	const Entity& record = model_.EntityOf(member);
+	const Entity record = model_.EntityOf(member);
 	Resolved result;
 	result.entity = member;
 	if(record.kind == kEntityFunction)
@@ -1822,7 +1844,7 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 	vector<Ranked> viable;
 	for(size_t index = 0; index < candidates.size(); ++index)
 	{
-		const Type& function = model_.Get(candidates[index].type);
+		const Type function = model_.Get(candidates[index].type);
 		if(function.kind != kTypeFunction)
 		{
 			continue;
@@ -1896,8 +1918,8 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 		throw SemanticError("no matching function for `" + text + "`");
 	}
 
-	const Candidate& chosen = viable[static_cast<size_t>(best)].candidate;
-	const Type& function = model_.Get(chosen.type);
+	const Candidate chosen = viable[static_cast<size_t>(best)].candidate;
+	const Type function = model_.Get(chosen.type);
 	Resolved result;
 	result.type = function.base;
 	result.function = chosen.entity;
@@ -1937,7 +1959,7 @@ Analyzer::Resolved Analyzer::SemIndirectCall(int node, int scope, const Resolved
 	{
 		throw SemanticError("the callee is not a function");
 	}
-	const Type& record = model_.Get(function);
+	const Type record = model_.Get(function);
 	const size_t fixed = record.params.size();
 	// 5.2.2/1: an indirect call's arity is fixed by the pointer's type.
 	if(arguments.size() < fixed || (!record.varargs && arguments.size() > fixed))

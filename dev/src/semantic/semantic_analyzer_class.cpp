@@ -145,13 +145,17 @@ void Analyzer::CheckFunctionQualifiers(int scope, int type)
 	throw SemanticError("ref-qualifier requires an ordinary non-static member function");
 }
 
-// 3.2/1: a function may be defined only once in a translation unit.
-void Analyzer::NoteFunctionDefinition(int entity, const string& name)
+// 3.2/1: a function may be defined only once in a translation unit.  An
+// overload set is one entity in the model but several functions, so the
+// duplicate is the same signature defined twice, not the same name.
+void Analyzer::NoteFunctionDefinition(int entity, const string& name, int scope, int type)
 {
-	if(model_.EntityOf(entity).body >= 0)
+	const pair<int, int> key(scope, type);
+	if(defined_functions_[key].count(name) != 0)
 	{
 		throw SemanticError("duplicate function definition of `" + name + "`");
 	}
+	defined_functions_[key].insert(name);
 	model_.EntityOf(entity).body = 1;
 }
 
@@ -798,7 +802,7 @@ void Analyzer::AnalyzeFunctionDefinition(int node, int scope, bool defer)
 	{
 		return;
 	}
-	NoteFunctionDefinition(entity, name);
+	NoteFunctionDefinition(entity, name, target, type);
 	vector<int> params;
 	bool varargs = false;
 	vector<pair<string, int> > names;
@@ -843,7 +847,7 @@ void Analyzer::AnalyzeSpecialMember(int node, int scope, int enclosing_class)
 	{
 		return;
 	}
-	NoteFunctionDefinition(entity, name);
+	NoteFunctionDefinition(entity, name, target, type);
 	vector<int> params;
 	bool varargs = false;
 	vector<pair<string, int> > names;
@@ -1096,11 +1100,50 @@ void Analyzer::AnalyzeStatement(int node, int scope)
 		{
 			AnalyzeDeclaration(child, inner, -1);
 		}
+		else if(child_tag == "condition")
+		{
+			// 6.4/3: a declaration in a condition belongs to the scope the
+			// statement owns, which is where its substatements are looked up.
+			AnalyzeCondition(child, inner);
+		}
 		else if(IsStatementTag(child_tag))
 		{
 			AnalyzeStatement(child, inner);
 		}
 	}
+}
+
+// The declaration a condition introduces, bound in the scope the selection or
+// iteration statement owns so that its substatements see it (6.4/3).
+void Analyzer::AnalyzeCondition(int node, int scope)
+{
+	const int declaration = FindChild(node, "condition-declaration");
+	if(declaration < 0)
+	{
+		return;
+	}
+	const int seq = FindChild(declaration, "decl-specifier-seq");
+	const int declarator = FindChild(declaration, "declarator");
+	Specifiers spec;
+	if(seq >= 0)
+	{
+		AnalyzeSpecifiers(seq, scope, spec, string(), false);
+	}
+	const int type = declarator < 0 ? spec.type : BuildDeclarator(declarator, spec.type, scope);
+	string name;
+	CollectDeclaratorName(declarator, name);
+	if(name.empty())
+	{
+		return;
+	}
+	const int entity = FindOrCreateObject(scope, name, type);
+	Binding binding;
+	binding.kind = kBindingVariable;
+	binding.name = name;
+	binding.type = type;
+	binding.entity = entity;
+	model_.AddBinding(scope, binding);
+	model_.NoteDeclaration(declarator, type, entity, scope);
 }
 
 }  // namespace semantic
