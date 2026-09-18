@@ -7,15 +7,16 @@
 - Last reviewed commit: `91b13266` (no stage audit has run yet).
 - Implementation commits: `f303ce5d` (the resolved-semantics layer, the tree,
   the dump and the driver), then the conversion, naming, statement and
-  reference-binding increments listed under "Findings, changes and evidence".
+  reference-binding increments listed under "Findings, changes and evidence",
+  then `edd6cbe8` (the function-template slice).
 - Target: `cppgm++ --emit-semantics -o <out> <src>...` runs translation phases
   1-7, the PA5 parse, the PA6 scope/type analysis, resolves expressions,
   statements, calls, conversions and the limited overload set, and writes the
   deterministic resolved-tree dump the checked-in `.ref` files define.
-- Progress: **185 / 186** checked-in PA7 tests pass; `make
+- Progress: **186 / 186** checked-in PA7 tests pass; `make
   test-report-through-pa6` passes 498 / 498; `perl
   scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` reports no issue; the
-  personal differential harness agrees with the reference on 44 curated
+  personal differential harness agrees with the reference on 58 curated
   reproducers; the personal benchmark's dumps are byte-identical to the
   reference.
 
@@ -46,6 +47,16 @@ file bytes -> TranslatedSource -> PPTokenizer -> PPTokenReader
 - `semantic_semantics.cpp` walks declarations and statements, reading back the
   scope and declaration facts the PA6 analysis recorded rather than deriving
   them again.
+- `semantic_template.cpp` owns the narrowest template layer the one fixture
+  that reaches templates needs: registering a function template in the scope
+  its name belongs to (14.1/2), substituting a written argument list (14.2),
+  deducing the arguments a call leaves out (14.8.2), and declaring the
+  specialization the walk demanded (14.7.1).  It is deliberately not a
+  template engine: every parameter is a type parameter, every argument is a
+  type, and deduction walks only the bare, pointer, reference and function
+  shapes the slice can build.  A class template, a non-type parameter, a
+  template-template parameter and a partial specialization are absent rather
+  than approximated.
 - `semantics_dump.cpp` and `semantic_driver.cpp` print the tree.
 
 The two passes stay apart because they answer different questions.  The PA6
@@ -83,6 +94,18 @@ pointer-to-member type former and base-class list the call layer needs.
   name; a function declaration prints its entity's qualified name; an
   id-expression prints what the source wrote.  An unnamed namespace is not a
   component.
+- **Templates.** 14.1/2 puts a template's name in the enclosing scope, so the
+  registry records it there rather than in the template-parameter scope the
+  declaration itself was analysed in, and nothing about `--emit-types` changes.
+  14.2/4 matches the written argument list against the template parameter list,
+  so two templates of one name that share a parameter list both produce a
+  substitution; which one a template-id denotes is then 13.4's question,
+  answered by the target type of the address, and the answer has to exist
+  because a name that denotes several functions has no type of its own.  A
+  call written with an explicit argument list ranks the specializations the
+  list gives like any other candidate set.  A specialization is only
+  *instantiated* once the ranking has chosen it, so the dump shows exactly the
+  instantiations the unit demanded, after the declarations the source wrote.
 - **Statements.** A condition declaration binds in the scope its statement owns
   (6.4/3), which the PA6 dump now shows too; a `for`-init declaration belongs
   to its loop (6.5.3/1); a case label is an integral constant expression; and
@@ -132,6 +155,20 @@ harness, and each is a reading the standard and the reference agree on:
   member reached through a const object is const (9.3.2/2).
 - **The target type chooses the member an address denotes** (13.4), which is
   what tells two cv-qualified member overloads apart.
+- **`300-static-cast-overloaded-function-template-argument` needs templates.**
+  The last red fixture writes `&hello<stream>` and calls `take(...)`, so the
+  stage grew the template slice above.  It is the one place the handout's *Out
+  Of Scope* list and the checked-in fixtures disagree: "template functions or
+  template-aware overload resolution" is out of scope, and the fixture is a
+  `tests/general/` intake case that reaches both.  The fixtures are the oracle,
+  so the slice was built rather than the fixture waived; the reference's own
+  `--emit-types` for the same input instantiates too, which is what says the
+  behaviour is the reference's design rather than a bug in it.
+- **An argument of type void is not a value** (5.2.2/4).  Found while probing
+  the deduced-call path: `take(other(1))` where `other` returns void was
+  accepted.  The reference fails on this input with an internal consistency
+  error and `g++ -std=c++11` rejects it, so the call layer now rejects it at
+  the argument list, where the rule lives, rather than at one call form.
 
 ## Performance evidence
 
@@ -149,29 +186,32 @@ invented.
 
 Frozen protocol, 3 000 groups (1 286 528 B of source, a 12 200 816 B dump of
 267 094 resolved nodes), 5 ABBA blocks, 20 timed runs per label, dumps compared
-byte for byte before any timing is accepted:
+byte for byte before any timing is accepted.  Re-measured on `edd6cbe8`, the
+template slice's commit:
 
 | tool | latency (s) | peak RSS (MB) |
 | --- | --- | --- |
-| `cppgm++-ref` | 1.335 [1.291..1.402] | 147.8 [147.5..148.0] |
-| `cppgm++` | 0.889 [0.882..1.025] | 129.6 [129.4..129.8] |
+| `cppgm++-ref` | 1.306 [1.298..1.450] | 147.8 [147.7..148.0] |
+| `cppgm++` | 0.895 [0.877..0.961] | 129.7 [129.3..129.9] |
 
-Paired difference (mine - ref): median -0.4483 s, 5 of 5 blocks negative, MAD
-0.0315 s, range [-0.4798..-0.2663].  A/A calibration on the same schedule:
-paired difference median +0.0058 s, 2 of 5 blocks negative, MAD 0.0117 s,
-range [-0.0077..+0.0422].  The latency effect is 38x the noise floor.  Every
+Paired difference (mine - ref): median -0.4058 s, 5 of 5 blocks negative, MAD
+0.0093 s, range [-0.4150..-0.3440].  A/A calibration on the same schedule:
+paired difference median +0.0023 s, 2 of 5 blocks negative, MAD 0.0048 s,
+range [-0.0150..+0.0071].  The latency effect is 85x the noise floor.  Every
 observation is kept in
-`/tmp/pa7_semantics_benchmark/semantics_benchmark.tsv`.
+`/tmp/pa7_semantics_benchmark/semantics_benchmark.tsv`.  The dump is
+byte-identical to the reference, so the latency difference is the compiler's
+own work and not a different output.
 
 The scaling is linear in the declarations and the expressions they hold,
 measured from outside on the same corpus generator:
 
 | groups | source bytes | latency (s) | peak RSS (MB) |
 | --- | --- | --- | --- |
-| 500 | 214 337 | 0.14 | 22.9 |
-| 1 000 | 428 338 | 0.29 | 41.5 |
-| 2 000 | 857 338 | 0.57 | 78.1 |
-| 4 000 | 1 715 338 | 1.15 | 150.8 |
+| 500 | 214 527 | 0.155 | 22.9 |
+| 1 000 | 428 528 | 0.293 | 41.4 |
+| 2 000 | 857 528 | 0.586 | 78.3 |
+| 4 000 | 1 715 528 | 1.171 | 150.9 |
 
 Doubling the input doubles both, which is what "semantic work tracks actual
 declarations, lookup candidates and demanded specialization facts" means.  No
@@ -180,40 +220,70 @@ compiler-work budget to justify and none is claimed.
 
 ## Validation
 
-- `make test-pa7` - 185 / 186 (see the known difference below).
+- `make test-pa7` - 186 / 186.
 - `make test-report-through-pa6` - 498 / 498 (pa1-pa4 205 / 205, pa5 188 / 188,
   pa6 105 / 105).
-- `perl scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` - pass (76
+- `perl scripts/cppgm_file_audit.pl --stage pa7 --paths dev/src` - pass (77
   files checked, 2 warnings about the two headers' inline bodies).
 - `student.tests/semantics_benchmark.pl` - dumps byte-identical to the
   reference; latency and peak RSS reported above.
-- `student.tests/semantics_differential.pl` - 44 curated reduced reproducers of
-  the conversion, ranking, value-category, naming, statement-scope and
-  rejection corners agree with the reference in exit status and dump.
+- `student.tests/semantics_differential.pl` - 58 curated reduced reproducers of
+  the conversion, ranking, value-category, naming, statement-scope, template
+  and rejection corners agree with the reference in exit status and dump.
 - `dev/src/semantic/*.cpp` compile clean under `-Wall -Wextra`.
 
 ## Handoff ledger
 
 ### Unfinished implementation
 
-One checked-in fixture remains: `300-static-cast-overloaded-function-template-
-argument` reaches **template-id instantiation and template argument
-deduction**, which the PA7 handout puts out of scope ("template functions or
-template-aware overload resolution" under *Out Of Scope*, and "template
-functions" in the same list).  The fixture writes `&hello<stream>` and calls
-`take(...)`, a function template whose parameter is deduced from the argument;
-the reference prints the two instantiations as declarations after the unit's
-own.  Nothing else in the stage depends on it: the other fixture that names a
-member template (`300-static-cast-member-overload-prefers-nontemplate`) passes,
-because its template member is simply not a candidate PA7 instantiates.
+Two related pieces of the template slice are still missing, and both are
+recorded with a reduced reproducer rather than waived.  Neither is a failing
+fixture: the checked-in suite is 186 / 186.
 
-The boundary is concrete rather than budgetary: a template-id needs a
-specialization the analysis never demanded, and a deduced call needs the
-argument-deduction machinery of 14.8.2.  Both belong to the later assignment
-that owns templates and demand, and neither can be approximated here without
-either hard-coding the fixture or building a second, partial template engine
-inside this stage.  This is unfinished *implementation* in the sense that the
-fixture is red, and it is recorded rather than waived.
+1. **A template definition is not instantiated as a definition.**
+   `template<class T> void take(T) {} void use() { take(1); }` prints
+   `function-definition take function of (int) returning void` with a
+   `compound-statement` in the reference and `function-declaration` without one
+   here.  The boundary is that a body is not a type: instantiating one means
+   opening a scope for the specialization whose parameter entities carry the
+   substituted types and re-walking the body there, while every nested statement
+   still reads `Model::ScopeAt`, which the PA6 analysis filled with the
+   *template's* scope.  That is a second instantiation engine, not an extension
+   of the substitution this stage has, and the handout puts it out of scope
+   twice over ("template functions", "class-aware call resolution").  The
+   fixture set reaches templates only through declarations.
+2. **A declaration is visible before it is declared.**  `void use() { take(1); }
+   void take(int);` is rejected by the reference and by `g++ -std=c++11`, and
+   accepted here, because the PA7 walk runs after the whole PA6 analysis and
+   `CollectCandidates` reads the scope's final binding list.  The same holds for
+   the template path: with `template<class T> void take(T); void use() {
+   take(1); } void take(int);` the reference resolves the call to the
+   instantiation and this compiler resolves it to the later non-template.  This
+   is not a template defect - it is the shared lookup's, and it predates this
+   stage - but it is the largest correctness gap the stage has.  Fixing it means
+   recording the point each declaration landed at and filtering lookup by the
+   use's own point, and that rule has to exempt a class's complete-class context
+   (3.3.7), where a later member *is* visible; the change touches every lookup
+   path in a stage that currently passes 186 / 186 and 498 / 498, so it is
+   recorded for the audit rather than attempted here.
+
+### Known differences outside the slice
+
+These are inputs the handout's *Out Of Scope* list covers, kept so the
+divergence is visible rather than discovered later.  None is a checked-in
+fixture.
+
+- **Constructor selection.**  `take(stream())` and `take(value)` with a
+  class-typed `value` need the reference's `constructor-action` node and an
+  implicit constructor body.  `template<class T> void take(T); struct s {};
+  void use() { take(s()); }` succeeds in the reference and is rejected here.
+- **A reference-internal error.**  `template<class T> void take(T); template
+  <class U> void other(U); void use() { take(other(1)); }` fails in the
+  reference with `function template parameter metadata does not match
+  declarator`, which is a consistency check rather than a language diagnostic.
+  `g++ -std=c++11` rejects the input for the argument's type, and this compiler
+  now rejects it for the same reason, so the two agree on the exit status and
+  not on the message - diagnostic text is not compared.
 
 ### Independent review questions
 
@@ -243,8 +313,24 @@ reading the stage chose where the handout does not pin the behaviour.
    reasons of declaration syntax the PA7 slice does not model, and a
    class-typed functional cast with arguments is outside the handout's slice;
    the stage rejects it rather than building a constructor call it cannot rank.
+5. **A template-id with several specializations is resolved by its target.**
+   `template<class T> void hello(T); template<class T> void hello(T, int);` and
+   `&hello<stream>` inside `static_cast<void(*)(stream)>(...)` picks the
+   one-parameter specialization, and it picks the same one whichever order the
+   two templates are declared in.  Without the cast the reference fails with
+   `invalid PA6 type identity`, which is why the stage reads 13.4's
+   target-directed rule rather than declaration order.  A reviewer should
+   decide whether a later stage keeps that reading or resolves the template-id
+   against the target type only where one is written.
+6. **The dump's instantiation order.**  An instantiation prints after the
+   unit's own declarations, in the order the walk first demanded one, which is
+   what the one fixture that reaches templates shows.  Where an instantiation
+   and a deferred member body or an implicit constructor both appear the order
+   between them is not pinned by any fixture; the stage prints the
+   instantiations last.
 
 ### Known differences from the reference
 
-None beyond the one red fixture above.  The differential harness's curated list
-holds the readings that could have diverged; every one of them agrees.
+None inside the slice.  The differential harness's curated list holds the
+readings that could have diverged - now including thirteen template
+reproducers - and every one of them agrees in exit status and dump.
