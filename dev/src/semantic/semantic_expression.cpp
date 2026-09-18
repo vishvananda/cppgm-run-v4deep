@@ -57,6 +57,18 @@ int DigitValue(char c)
 	return -1;
 }
 
+// The word a terminal label spells when it carries its token kind, as
+// `KW_DOUBLE:double` does.
+string KeywordWord(const string& label)
+{
+	if(label.compare(0, 3, "KW_") != 0)
+	{
+		return string();
+	}
+	const size_t colon = label.find(':');
+	return colon == string::npos ? string() : label.substr(colon + 1);
+}
+
 bool EndsWith(const string& text, const char* suffix)
 {
 	const size_t length = strlen(suffix);
@@ -500,6 +512,13 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 	}
 
 	int source = SourceType(from);
+	// 4.1: a prvalue of a cv-qualified scalar type is the unqualified type, so
+	// the top-level qualifier of the argument does not stand in the way of a
+	// by-value parameter (8.5/6).
+	if(model_.Get(source).kind == kTypeCv)
+	{
+		source = model_.Get(source).base;
+	}
 	// 4.2 and 4.3: an array and a function decay to a pointer, which is an
 	// lvalue transformation and so still an exact match.
 	bool decayed = false;
@@ -795,6 +814,18 @@ void Analyzer::CollectFrom(int scope, const string& name, vector<Candidate>& out
 			const Binding& binding = record.bindings[index];
 			if(binding.kind == kBindingFunction && binding.name == name)
 			{
+				// 13.1/3: two declarations with one signature and one return
+				// type are one function, not two candidates.
+				bool seen = false;
+				for(size_t existing = 0; existing < out.size(); ++existing)
+				{
+					seen = seen || (out[existing].entity == binding.entity &&
+					                out[existing].type == binding.type);
+				}
+				if(seen)
+				{
+					continue;
+				}
 				Candidate candidate;
 				candidate.entity = binding.entity;
 				candidate.type = binding.type;
@@ -1040,14 +1071,25 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		const int type_entity = qualifier.empty()
 		    ? model_.LookupTypeUnqualified(scope, name)
 		    : model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier), name);
-		if(type_entity < 0)
+		if(type_entity >= 0)
 		{
-			throw SemanticError("unknown expression name `" + text + "`");
+			result.type_name = true;
+			result.type = model_.EntityOf(type_entity).type;
+			result.entity = type_entity;
+			return result;
 		}
-		result.type_name = true;
-		result.type = model_.EntityOf(type_entity).type;
-		result.entity = type_entity;
-		return result;
+		// A simple-type-specifier written as a keyword is the functional cast's
+		// own type name, which the parser keeps with its token kind.
+		const string word = KeywordWord(text);
+		if(!word.empty())
+		{
+			vector<string> words;
+			words.push_back(word);
+			result.type_name = true;
+			result.type = model_.Fundamental(FundamentalFromSpecifiers(words));
+			return result;
+		}
+		throw SemanticError("unknown expression name `" + text + "`");
 	}
 	const Entity record = model_.EntityOf(entity);
 	result.entity = entity;
@@ -1601,8 +1643,6 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 {
 	const string label = Label(node);
 	const string op = AfterColon(label);
-	const int name_node = ChildAt(node, 1);
-	const string name = Label(name_node);
 	const Resolved object = SemExpr(ChildAt(node, 0), scope);
 	int class_type = ReferredType(object.type);
 	int object_cv = 0;
@@ -1630,22 +1670,24 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	}
 	// A qualified member name searches the class the qualifier names, which may
 	// be a base of the object's class (5.2.5/5).
-	const string qualified = Label(name_node);
+	const string qualified = Label(ChildAt(node, 1));
+	string qualifier;
+	string member_name;
+	SplitQualifiedName(qualified, qualifier, member_name);
 	int search = class_type;
-	const size_t split = qualified.find("::");
-	if(split != string::npos)
+	if(!qualifier.empty())
 	{
-		search = model_.ResolveQualifier(scope, qualified.substr(0, split + 2));
+		search = model_.ResolveQualifier(scope, qualifier);
 	}
 	const int class_scope = ClassScopeOf(search);
 	if(class_scope < 0)
 	{
 		throw SemanticError("`" + qualified + "` does not name a class member");
 	}
-	const int member = model_.LookupValueIn(class_scope, name);
+	const int member = model_.LookupValueIn(class_scope, member_name);
 	if(member < 0)
 	{
-		throw SemanticError("no member `" + name + "`");
+		throw SemanticError("no member `" + member_name + "`");
 	}
 	const Entity record = model_.EntityOf(member);
 	Resolved result;
@@ -1824,7 +1866,7 @@ Analyzer::Resolved Analyzer::SemCall(int node, int scope)
 		{
 			return SemFunctionalCast(node, scope, callee.type, arguments);
 		}
-		throw SemanticError("`" + text + "` does not name a function");
+		return SemIndirectCall(node, scope, callee, arguments);
 	}
 	const Resolved callee = SemExpr(callee_node, scope);
 	return SemIndirectCall(node, scope, callee, arguments);
@@ -2115,8 +2157,11 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 		const bool pointer_pair = model_.Get(source).kind == kTypePointer &&
 		                          (model_.Get(ReferredType(target)).kind == kTypePointer ||
 		                           model_.Get(ReferredType(target)).kind == kTypeMemberPointer);
-		const bool null_to_pointer =
-		    operand.null_zero && NullPointerTarget(ReferredType(target)) >= 0;
+		const bool null_source = operand.null_zero ||
+		    (model_.Get(source).kind == kTypeFundamental &&
+		     model_.Get(source).base == posttoken::FT_NULLPTR_T);
+		const bool null_to_pointer = null_source &&
+		    NullPointerTarget(ReferredType(target)) >= 0;
 		const bool to_bool = model_.Get(ReferredType(target)).kind == kTypeFundamental &&
 		                     model_.Get(ReferredType(target)).base == posttoken::FT_BOOL &&
 		                     IsScalarType(source);

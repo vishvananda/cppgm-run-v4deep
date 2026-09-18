@@ -650,7 +650,7 @@ int Analyzer::SemStatement(int node, int scope)
 				sem_.AddChild(built, SemExpr(child, scope).node);
 				continue;
 			}
-			sem_.AddChild(built, SemStatement(child, scope));
+			sem_.AddChild(built, SemSlotStatement(child, -1));
 		}
 		return built;
 	}
@@ -669,6 +669,24 @@ int Analyzer::SemStatement(int node, int scope)
 			throw SemanticError("`continue` outside a loop");
 		}
 		return sem_.Add("continue-statement");
+	}
+	if(tag == "enum-specifier" || tag == "class-specifier" ||
+	   tag == "class-forward-declaration" || tag == "bit-field-declaration" ||
+	   tag == "special-member-declaration" || tag == "special-member-definition" ||
+	   tag == "access-specifier")
+	{
+		// A declaration that binds nothing a later line needs still occupies
+		// its own line in a block.
+		const int wrapper = sem_.Add("simple-declaration");
+		if(tag == "class-specifier")
+		{
+			const int built = SemAnonymousUnionStorage(node, scope);
+			if(built >= 0)
+			{
+				sem_.AddChild(wrapper, built);
+			}
+		}
+		return wrapper;
 	}
 	if(tag == "using-declaration" || tag == "using-directive" ||
 	   tag == "empty-declaration" || tag == "static-assert-declaration" ||
