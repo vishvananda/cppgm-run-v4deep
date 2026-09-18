@@ -69,6 +69,16 @@ string KeywordWord(const string& label)
 	return colon == string::npos ? string() : label.substr(colon + 1);
 }
 
+// Whether a name is a simple-type-specifier's own word, which is how a
+// functional cast writes `double(x)`.
+bool IsSimpleTypeWord(const string& word)
+{
+	return word == "void" || word == "bool" || word == "char" || word == "wchar_t" ||
+	       word == "char16_t" || word == "char32_t" || word == "int" || word == "short" ||
+	       word == "long" || word == "signed" || word == "unsigned" || word == "float" ||
+	       word == "double";
+}
+
 bool EndsWith(const string& text, const char* suffix)
 {
 	const size_t length = strlen(suffix);
@@ -100,6 +110,10 @@ bool Analyzer::IsIntegralType(int type) const
 	{
 		return false;
 	}
+	if(model_.Get(type).kind == kTypeCv)
+	{
+		type = model_.Get(type).base;
+	}
 	const Type& record = model_.Get(type);
 	if(record.kind == kTypeEnum)
 	{
@@ -115,6 +129,10 @@ bool Analyzer::IsArithmeticType(int type) const
 	if(type < 0)
 	{
 		return false;
+	}
+	if(model_.Get(type).kind == kTypeCv)
+	{
+		type = model_.Get(type).base;
 	}
 	const Type& record = model_.Get(type);
 	if(record.kind == kTypeEnum)
@@ -155,6 +173,10 @@ bool Analyzer::IsScalarType(int type) const
 	{
 		return false;
 	}
+	if(model_.Get(type).kind == kTypeCv)
+	{
+		type = model_.Get(type).base;
+	}
 	const Type& record = model_.Get(type);
 	if(record.kind == kTypePointer || record.kind == kTypeMemberPointer)
 	{
@@ -177,6 +199,10 @@ int Analyzer::Promote(int type) const
 	if(type < 0)
 	{
 		return type;
+	}
+	if(model_.Get(type).kind == kTypeCv)
+	{
+		type = model_.Get(type).base;
 	}
 	const Type& record = model_.Get(type);
 	if(record.kind == kTypeEnum)
@@ -522,15 +548,18 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 	// 4.2 and 4.3: an array and a function decay to a pointer, which is an
 	// lvalue transformation and so still an exact match.
 	bool decayed = false;
-	if(model_.Get(source).kind == kTypeArray)
+	if(model_.Get(target).kind == kTypePointer)
 	{
-		source = model_.Pointer(model_.Get(source).base);
-		decayed = true;
-	}
-	else if(model_.Get(source).kind == kTypeFunction)
-	{
-		source = model_.Pointer(source);
-		decayed = true;
+		if(model_.Get(source).kind == kTypeArray)
+		{
+			source = model_.Pointer(model_.Get(source).base);
+			decayed = true;
+		}
+		else if(model_.Get(source).kind == kTypeFunction)
+		{
+			source = model_.Pointer(source);
+			decayed = true;
+		}
 	}
 	if(source == target)
 	{
@@ -819,8 +848,11 @@ void Analyzer::CollectFrom(int scope, const string& name, vector<Candidate>& out
 				bool seen = false;
 				for(size_t existing = 0; existing < out.size(); ++existing)
 				{
-					seen = seen || (out[existing].entity == binding.entity &&
-					                out[existing].type == binding.type);
+					// 13.1/3: two declarations of one signature are one
+					// function, so the candidate set holds it once.
+					seen = seen || (out[existing].type == binding.type) ||
+					       (model_.SameSignature(out[existing].type, binding.type) &&
+					        model_.SameFunctionType(out[existing].type, binding.type));
 				}
 				if(seen)
 				{
@@ -950,7 +982,7 @@ string Analyzer::BoundSpelling(int type, int scope) const
 	{
 		return string();
 	}
-	const Type& record = model_.Get(type);
+	const Type record = model_.Get(type);
 	if(record.kind != kTypeFunction || model_.ScopeOf(scope).kind != kScopeClass)
 	{
 		return model_.Spelling(type);
@@ -1080,7 +1112,11 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		}
 		// A simple-type-specifier written as a keyword is the functional cast's
 		// own type name, which the parser keeps with its token kind.
-		const string word = KeywordWord(text);
+		string word = KeywordWord(text);
+		if(word.empty() && IsSimpleTypeWord(text))
+		{
+			word = text;
+		}
 		if(!word.empty())
 		{
 			vector<string> words;
@@ -1172,7 +1208,7 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 	if(op == "++" || op == "--")
 	{
 		const Resolved operand = SemExpr(operand_node, scope);
-		if(operand.category != kLvalue || !IsScalarType(operand.type))
+		if(operand.category != kLvalue || !IsScalarType(ReferredType(operand.type)))
 		{
 			throw SemanticError("the operand of `" + op + "` must be a modifiable lvalue");
 		}
@@ -1263,7 +1299,7 @@ Analyzer::Resolved Analyzer::SemPostfix(int node, int scope)
 {
 	const string op = OperatorWord(Label(node));
 	const Resolved operand = SemExpr(ChildAt(node, 0), scope);
-	if(operand.category != kLvalue || !IsScalarType(operand.type))
+	if(operand.category != kLvalue || !IsScalarType(ReferredType(operand.type)))
 	{
 		throw SemanticError("the operand of `" + op + "` must be a modifiable lvalue");
 	}
@@ -1284,8 +1320,18 @@ Analyzer::Resolved Analyzer::SemBinary(int node, int scope)
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
 	const Resolved right = SemExpr(ChildAt(node, 1), scope);
 	Resolved result;
-	const int left_type = ReferredType(left.type);
-	const int right_type = ReferredType(right.type);
+	int left_type = ReferredType(left.type);
+	int right_type = ReferredType(right.type);
+	// 4.2: an array operand of a binary operator decays to a pointer, which is
+	// what makes `a + 2` a pointer sum and `p - q` a pointer difference.
+	if(model_.Get(left_type).kind == kTypeArray)
+	{
+		left_type = model_.Pointer(model_.Get(left_type).base);
+	}
+	if(model_.Get(right_type).kind == kTypeArray)
+	{
+		right_type = model_.Pointer(model_.Get(right_type).base);
+	}
 	const ETypeKind left_kind = left_type < 0 ? kTypeFundamental : model_.Get(left_type).kind;
 	const ETypeKind right_kind = right_type < 0 ? kTypeFundamental : model_.Get(right_type).kind;
 	const bool left_pointer = left_kind == kTypePointer || left_kind == kTypeMemberPointer;
@@ -1422,7 +1468,7 @@ Analyzer::Resolved Analyzer::SemAssignment(int node, int scope)
 	const string op = OperatorWord(Label(node));
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
 	const Resolved right = SemExpr(ChildAt(node, 1), scope);
-	if(left.category != kLvalue || !IsScalarType(left.type))
+	if(left.category != kLvalue || !IsScalarType(ReferredType(left.type)))
 	{
 		throw SemanticError("the left operand of `" + op + "` must be a modifiable lvalue");
 	}
@@ -1484,8 +1530,16 @@ Analyzer::Resolved Analyzer::SemConditional(int node, int scope)
 	{
 		throw SemanticError("the condition of `?:` must be a scalar");
 	}
-	const int left_type = ReferredType(left.type);
-	const int right_type = ReferredType(right.type);
+	int left_type = ReferredType(left.type);
+	int right_type = ReferredType(right.type);
+	if(model_.Get(left_type).kind == kTypeArray)
+	{
+		left_type = model_.Pointer(model_.Get(left_type).base);
+	}
+	if(model_.Get(right_type).kind == kTypeArray)
+	{
+		right_type = model_.Pointer(model_.Get(right_type).base);
+	}
 	const bool left_pointer = model_.Get(left_type).kind == kTypePointer ||
 	                          model_.Get(left_type).kind == kTypeMemberPointer;
 	const bool right_pointer = model_.Get(right_type).kind == kTypePointer ||
@@ -1674,12 +1728,11 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	string qualifier;
 	string member_name;
 	SplitQualifiedName(qualified, qualifier, member_name);
-	int search = class_type;
+	int class_scope = ClassScopeOf(class_type);
 	if(!qualifier.empty())
 	{
-		search = model_.ResolveQualifier(scope, qualifier);
+		class_scope = model_.ResolveQualifier(scope, qualifier);
 	}
-	const int class_scope = ClassScopeOf(search);
 	if(class_scope < 0)
 	{
 		throw SemanticError("`" + qualified + "` does not name a class member");
@@ -1703,8 +1756,11 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 		result.type = model_.Qualified(object_cv, ReferredType(record.type));
 		result.category = kLvalue;
 	}
+	// 5.2.5: the dump names the member the operator selected, so the label is
+	// the operator's kind and the member's own name.
+	const string prefix = label.compare(0, 7, "OP_ARROW") == 0 ? "OP_ARROW:" : "OP_DOT:";
 	result.node = sem_.Add("member-expression", result.category, model_.Spelling(result.type),
-	                       label);
+	                       prefix + member_name);
 	sem_.AddChild(result.node, object.node);
 	return result;
 }
@@ -2150,7 +2206,11 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 	const bool static_form = word == "static_cast";
 	if(static_form)
 	{
-		const int source = ReferredType(operand.type);
+		int source = ReferredType(operand.type);
+		if(model_.Get(source).kind == kTypeCv)
+		{
+			source = model_.Get(source).base;
+		}
 		const bool same = model_.Same(source, ReferredType(target));
 		const bool integral_pair = IsIntegralType(source) && IsIntegralType(target);
 		const bool arithmetic_pair = IsArithmeticType(source) && IsArithmeticType(target);
