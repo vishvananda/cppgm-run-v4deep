@@ -985,12 +985,12 @@ string Analyzer::BoundSpelling(int type, int scope) const
 	const Type record = model_.Get(type);
 	if(record.kind != kTypeFunction || model_.ScopeOf(scope).kind != kScopeClass)
 	{
-		return model_.Spelling(type);
+		return Spell(type);
 	}
 	const int class_entity = model_.ScopeOf(scope).entity;
 	if(class_entity < 0)
 	{
-		return model_.Spelling(type);
+		return Spell(type);
 	}
 	const int class_type = model_.EntityOf(class_entity).type;
 	const int qualified = model_.Qualified(record.quals, class_type);
@@ -1000,7 +1000,7 @@ string Analyzer::BoundSpelling(int type, int scope) const
 	{
 		params.push_back(record.params[index]);
 	}
-	return model_.Spelling(model_.Function(record.base, params, record.varargs,
+	return Spell(model_.Function(record.base, params, record.varargs,
 	                                       0, 0));
 }
 
@@ -1010,7 +1010,7 @@ string Analyzer::QualifiedEntitySpelling(int entity) const
 	{
 		return string();
 	}
-	return model_.Spelling(model_.EntityOf(entity).type);
+	return Spell(model_.EntityOf(entity).type);
 }
 
 }  // namespace semantic
@@ -1060,7 +1060,7 @@ Analyzer::Resolved Analyzer::SemLiteral(int node, int scope)
 			}
 		}
 	}
-	result.node = sem_.Add("literal", result.category, model_.Spelling(result.type), text);
+	result.node = sem_.Add("literal", result.category, Spell(result.type), text);
 	return result;
 }
 
@@ -1082,7 +1082,7 @@ Analyzer::Resolved Analyzer::SemKeywordLiteral(int node, int scope)
 		throw SemanticError("unsupported keyword literal `" + word + "`");
 	}
 	result.category = kPrvalue;
-	result.node = sem_.Add("literal", result.category, model_.Spelling(result.type), Label(node));
+	result.node = sem_.Add("literal", result.category, Spell(result.type), Label(node));
 	return result;
 }
 
@@ -1137,7 +1137,7 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		result.category = kPrvalue;
 		ostringstream out;
 		out << record.value;
-		result.node = sem_.Add("literal", result.category, model_.Spelling(result.type),
+		result.node = sem_.Add("literal", result.category, Spell(result.type),
 		                       out.str());
 		return result;
 	}
@@ -1154,7 +1154,7 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 			result.type = candidates[0].type;
 		}
 		result.node = sem_.Add("id-expression", result.category,
-		                       model_.Spelling(ReferredType(result.type)), text);
+		                       Spell(ReferredType(result.type)), text);
 		return result;
 	}
 	// 9.5/3: a name that an anonymous union injected into an enclosing scope
@@ -1165,16 +1165,16 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		result.type = ReferredType(record.type);
 		result.category = kLvalue;
 		result.node = sem_.Add("member-expression", result.category,
-		                       model_.Spelling(result.type), record.name);
+		                       Spell(result.type), record.name);
 		const int object = sem_.Add("id-expression", kLvalue,
-		                            model_.Spelling(model_.EntityOf(storage->second).type),
+		                            Spell(model_.EntityOf(storage->second).type),
 		                            model_.EntityOf(storage->second).name);
 		sem_.AddChild(result.node, object);
 		return result;
 	}
 	result.type = ReferredType(record.type);
 	result.category = kLvalue;
-	result.node = sem_.Add("id-expression", result.category, model_.Spelling(result.type), text);
+	result.node = sem_.Add("id-expression", result.category, Spell(result.type), text);
 	return result;
 }
 
@@ -1212,10 +1212,10 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 		{
 			throw SemanticError("the operand of `" + op + "` must be a modifiable lvalue");
 		}
-		result.type = operand.type;
+		result.type = ReferredType(operand.type);
 		result.category = kLvalue;
 		result.node = sem_.Add("unary-expression", result.category,
-		                       model_.Spelling(result.type), Label(node));
+		                       Spell(result.type), Label(node));
 		sem_.AddChild(result.node, operand.node);
 		return result;
 	}
@@ -1226,12 +1226,13 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 		{
 			throw SemanticError("the operand of `&` must be an lvalue");
 		}
-		if(model_.Get(operand.type).kind == kTypeFunction)
+		const int class_type = MemberClassOf(operand.entity);
+		if(class_type >= 0 && model_.Get(operand.type).kind == kTypeFunction)
 		{
-			// 5.3.1/3: the address of a function is a pointer to it, and the
-			// fixtures also reach the address of a member function, which the
-			// call layer resolves to the member the name denotes.
-			result.type = model_.Pointer(operand.type);
+			// 5.3.1/3 with 8.3.3: the address of a member function is a pointer
+			// to member, and the operand prints the member's bound type.
+			result.type = model_.MemberPointer(class_type, operand.type);
+			sem_.SetType(operand.node, BoundSpelling(operand.type, ClassScopeOf(class_type)));
 		}
 		else
 		{
@@ -1289,7 +1290,7 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 	{
 		throw SemanticError("unsupported unary operator `" + op + "`");
 	}
-	result.node = sem_.Add("unary-expression", result.category, model_.Spelling(result.type),
+	result.node = sem_.Add("unary-expression", result.category, Spell(result.type),
 	                       Label(node));
 	sem_.AddChild(result.node, operand.node);
 	return result;
@@ -1304,9 +1305,9 @@ Analyzer::Resolved Analyzer::SemPostfix(int node, int scope)
 		throw SemanticError("the operand of `" + op + "` must be a modifiable lvalue");
 	}
 	Resolved result;
-	result.type = operand.type;
+	result.type = ReferredType(operand.type);
 	result.category = kPrvalue;
-	result.node = sem_.Add("postfix-expression", result.category, model_.Spelling(result.type),
+	result.node = sem_.Add("postfix-expression", result.category, Spell(result.type),
 	                       Label(node));
 	sem_.AddChild(result.node, operand.node);
 	return result;
@@ -1455,7 +1456,7 @@ Analyzer::Resolved Analyzer::SemBinary(int node, int scope)
 	{
 		throw SemanticError("unsupported binary operator `" + op + "`");
 	}
-	result.node = sem_.Add("binary-expression", result.category, model_.Spelling(result.type),
+	result.node = sem_.Add("binary-expression", result.category, Spell(result.type),
 	                       Label(node));
 	sem_.AddChild(result.node, left.node);
 	sem_.AddChild(result.node, right.node);
@@ -1513,7 +1514,7 @@ Analyzer::Resolved Analyzer::SemAssignment(int node, int scope)
 	result.type = left.type;
 	result.category = kLvalue;
 	result.node = sem_.Add("assignment-expression", result.category,
-	                       model_.Spelling(result.type), Label(node));
+	                       Spell(result.type), Label(node));
 	sem_.AddChild(result.node, left.node);
 	sem_.AddChild(result.node, right.node);
 	return result;
@@ -1577,6 +1578,12 @@ Analyzer::Resolved Analyzer::SemConditional(int node, int scope)
 	{
 		throw SemanticError("the operands of `?:` are not compatible");
 	}
+	else if(left_type == right_type)
+	{
+		// 5.16/4-6: operands of one type have that type as the result, which
+		// the fixtures reach for the `bool` and enumeration pairs.
+		result.type = left_type;
+	}
 	else if(IsArithmeticType(left_type) && IsArithmeticType(right_type))
 	{
 		result.type = UsualArithmetic(left_type, right_type);
@@ -1602,7 +1609,7 @@ Analyzer::Resolved Analyzer::SemConditional(int node, int scope)
 	result.category = (left.category == kLvalue && right.category == kLvalue &&
 	                   left_type == right_type) ? kLvalue : kPrvalue;
 	result.node = sem_.Add("conditional-expression", result.category,
-	                       model_.Spelling(result.type));
+	                       Spell(result.type));
 	sem_.AddChild(result.node, condition.node);
 	sem_.AddChild(result.node, left.node);
 	sem_.AddChild(result.node, right.node);
@@ -1648,11 +1655,19 @@ Analyzer::Resolved Analyzer::SemSubscript(int node, int scope)
 	Resolved result;
 	result.type = element;
 	result.category = kLvalue;
-	result.node = sem_.Add("subscript-expression", result.category, model_.Spelling(result.type));
-	// The commuted form prints its operands in the order the source wrote them,
-	// which is the order the parser kept.
-	sem_.AddChild(result.node, left.node);
-	sem_.AddChild(result.node, right.node);
+	result.node = sem_.Add("subscript-expression", result.category, Spell(result.type));
+	// 5.2.1/1: `1[a]` is `a[1]`, and the dump prints the array operand first
+	// whichever way the source wrote it.
+	if(array_side == right.node)
+	{
+		sem_.AddChild(result.node, right.node);
+		sem_.AddChild(result.node, left.node);
+	}
+	else
+	{
+		sem_.AddChild(result.node, left.node);
+		sem_.AddChild(result.node, right.node);
+	}
 	return result;
 }
 
@@ -1687,7 +1702,7 @@ Analyzer::Resolved Analyzer::SemSizeof(int node, int scope)
 	Resolved result;
 	result.type = model_.Fundamental(posttoken::FT_UNSIGNED_LONG_INT);
 	result.category = kPrvalue;
-	result.node = sem_.Add("sizeof-expression", result.category, model_.Spelling(result.type));
+	result.node = sem_.Add("sizeof-expression", result.category, Spell(result.type));
 	return result;
 }
 
@@ -1759,7 +1774,7 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	// 5.2.5: the dump names the member the operator selected, so the label is
 	// the operator's kind and the member's own name.
 	const string prefix = label.compare(0, 7, "OP_ARROW") == 0 ? "OP_ARROW:" : "OP_DOT:";
-	result.node = sem_.Add("member-expression", result.category, model_.Spelling(result.type),
+	result.node = sem_.Add("member-expression", result.category, Spell(result.type),
 	                       prefix + member_name);
 	sem_.AddChild(result.node, object.node);
 	return result;
@@ -2033,12 +2048,22 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 	{
 		result.category = kPrvalue;
 	}
-	result.node = sem_.Add("call-expression", result.category, model_.Spelling(result.type));
+	result.node = sem_.Add("call-expression", result.category, Spell(result.type));
 	const int callee = sem_.Add("callee", QualifiedEntityName(chosen.entity), true);
 	sem_.SetType(callee, BoundSpelling(chosen.type, chosen.scope));
 	sem_.AddChild(result.node, callee);
 	for(size_t index = 0; index < arguments.size(); ++index)
 	{
+		// 4.10/1: an integer literal zero that becomes a pointer prints as the
+		// pointer it converted to.
+		if(arguments[index].null_zero)
+		{
+			const int target = viable[static_cast<size_t>(best)].conversions[index].target;
+			if(target >= 0 && NullPointerTarget(ReferredType(target)) >= 0)
+			{
+				sem_.SetType(arguments[index].node, Spell(ReferredType(target)));
+			}
+		}
 		sem_.AddChild(result.node, arguments[index].node);
 	}
 	return result;
@@ -2090,7 +2115,7 @@ Analyzer::Resolved Analyzer::SemIndirectCall(int node, int scope, const Resolved
 	{
 		result.category = kPrvalue;
 	}
-	result.node = sem_.Add("call-expression", result.category, model_.Spelling(result.type));
+	result.node = sem_.Add("call-expression", result.category, Spell(result.type));
 	sem_.AddChild(result.node, callee.node);
 	for(size_t index = 0; index < arguments.size(); ++index)
 	{
@@ -2122,7 +2147,7 @@ Analyzer::Resolved Analyzer::SemBuiltinCall(int node, int scope, const string& n
 		const Constant value = Evaluate(arguments[0], scope);
 		result.type = model_.Fundamental(posttoken::FT_INT);
 		result.category = kPrvalue;
-		result.node = sem_.Add("literal", result.category, model_.Spelling(result.type),
+		result.node = sem_.Add("literal", result.category, Spell(result.type),
 		                       value.valid ? "1" : "0");
 		return result;
 	}
@@ -2140,9 +2165,9 @@ Analyzer::Resolved Analyzer::SemBuiltinCall(int node, int scope, const string& n
 	}
 	result.type = model_.Fundamental(posttoken::FT_VOID);
 	result.category = kPrvalue;
-	result.node = sem_.Add("call-expression", result.category, model_.Spelling(result.type));
+	result.node = sem_.Add("call-expression", result.category, Spell(result.type));
 	const int callee = sem_.Add("callee", name, true);
-	sem_.SetType(callee, model_.Spelling(model_.EntityOf(builtin_abort_).type));
+	sem_.SetType(callee, Spell(model_.EntityOf(builtin_abort_).type));
 	sem_.AddChild(result.node, callee);
 	return result;
 }
@@ -2162,7 +2187,7 @@ Analyzer::Resolved Analyzer::SemFunctionalCast(int node, int scope, int target,
 	if(arguments.empty())
 	{
 		// 8.5/7: value-initialisation of a scalar is a zero.
-		result.node = sem_.Add("literal", result.category, model_.Spelling(result.type), "0");
+		result.node = sem_.Add("literal", result.category, Spell(result.type), "0");
 		return result;
 	}
 	if(arguments.size() != 1)
@@ -2173,7 +2198,7 @@ Analyzer::Resolved Analyzer::SemFunctionalCast(int node, int scope, int target,
 	{
 		throw SemanticError("the argument does not convert to the cast's type");
 	}
-	result.node = sem_.Add("cast-expression", result.category, model_.Spelling(result.type));
+	result.node = sem_.Add("cast-expression", result.category, Spell(result.type));
 	sem_.AddChild(result.node, arguments[0].node);
 	return result;
 }
@@ -2233,10 +2258,141 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 			throw SemanticError("`static_cast` cannot perform this conversion");
 		}
 	}
-	result.node = sem_.Add("cast-expression", result.category, model_.Spelling(result.type),
+	result.node = sem_.Add("cast-expression", result.category, Spell(result.type),
 	                       label);
 	sem_.AddChild(result.node, operand.node);
 	return result;
+}
+
+}  // namespace semantic
+}  // namespace cppgm
+
+namespace cppgm
+{
+namespace semantic
+{
+
+namespace
+{
+
+const char* ClassKeyWord(int key)
+{
+	switch(key)
+	{
+	case kClassKeyStruct:
+		return "struct";
+	case kClassKeyUnion:
+		return "union";
+	default:
+		return "class";
+	}
+}
+
+const char* EnumKeyWord(int key)
+{
+	switch(key)
+	{
+	case kEnumKeyClass:
+		return "enum class";
+	case kEnumKeyStruct:
+		return "enum struct";
+	default:
+		return "enum";
+	}
+}
+
+}  // namespace
+
+// The PA7 spelling of a type.  It differs from the PA6 one in one place: a
+// class type prints the qualified name of the scope it is a member of, so a
+// nested class is `struct N::S` rather than `struct S`.
+string Analyzer::Spell(int id) const
+{
+	if(id < 0)
+	{
+		return string();
+	}
+	const Type& type = model_.Get(id);
+	switch(type.kind)
+	{
+	case kTypeFundamental:
+		return kFundamentalNames[type.base];
+	case kTypeClass:
+	{
+		const string qualified = QualifiedScopeName(type.decl_scope);
+		return string(ClassKeyWord(type.class_key)) + " " +
+		       (qualified.empty() ? type.name : qualified);
+	}
+	case kTypeEnum:
+		return string(EnumKeyWord(type.enum_key)) + " " + type.name;
+	case kTypeTemplateParameter:
+		return string(type.class_key != 0 ? "template-parameter " : "typename ") + type.name;
+	case kTypeCv:
+		if(type.quals == 3)
+		{
+			return "const volatile " + Spell(type.base);
+		}
+		return string(type.quals == 1 ? "const " : "volatile ") + Spell(type.base);
+	case kTypePointer:
+		return "pointer to " + Spell(type.base);
+	case kTypeLvalueReference:
+		return "lvalue-reference to " + Spell(type.base);
+	case kTypeRvalueReference:
+		return "rvalue-reference to " + Spell(type.base);
+	case kTypeArray:
+	{
+		ostringstream out;
+		out << "array of " << (type.bound < 0 ? 0 : type.bound) << ' ' << Spell(type.base);
+		return out.str();
+	}
+	case kTypeMemberPointer:
+		return "member-pointer of " + Spell(type.base) + " to " + Spell(type.member);
+	case kTypeFunction:
+	{
+		string text = "function of (";
+		for(size_t index = 0; index < type.params.size(); ++index)
+		{
+			if(index != 0)
+			{
+				text += ", ";
+			}
+			text += Spell(type.params[index]);
+		}
+		if(type.varargs)
+		{
+			if(!type.params.empty())
+			{
+				text += ", ";
+			}
+			text += "...";
+		}
+		text += ')';
+		if(type.quals == 3)
+		{
+			text += " const volatile";
+		}
+		else if(type.quals == 1)
+		{
+			text += " const";
+		}
+		else if(type.quals == 2)
+		{
+			text += " volatile";
+		}
+		if(type.func_ref == 1)
+		{
+			text += " &";
+		}
+		else if(type.func_ref == 2)
+		{
+			text += " &&";
+		}
+		text += " returning ";
+		text += Spell(type.base);
+		return text;
+	}
+	}
+	return string();
 }
 
 }  // namespace semantic

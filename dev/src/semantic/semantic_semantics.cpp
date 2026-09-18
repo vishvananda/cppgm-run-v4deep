@@ -178,11 +178,11 @@ int Analyzer::SemAnonymousUnionStorage(int specifier, int scope)
 	model_.EntityOf(storage).decl_scope = scope;
 	union_storage_[class_type] = storage;
 	const int variable = sem_.Add("variable", name.str(), true);
-	sem_.SetType(variable, model_.Spelling(class_type));
+	sem_.SetType(variable, Spell(class_type));
 	Resolved object;
 	object.type = class_type;
 	object.category = kLvalue;
-	object.node = sem_.Add("id-expression", kLvalue, model_.Spelling(class_type), name.str());
+	object.node = sem_.Add("id-expression", kLvalue, Spell(class_type), name.str());
 	sem_.AddChild(variable, SemDefaultInitialization(object, class_type, scope));
 	return variable;
 }
@@ -234,13 +234,16 @@ void Analyzer::SemSimpleDeclaration(int node, int scope, vector<int>& out)
 		if(fact->entity >= 0 && model_.EntityOf(fact->entity).kind == kEntityAlias)
 		{
 			const int alias = sem_.Add("type-alias", name, true);
-			sem_.SetType(alias, model_.Spelling(fact->type));
+			sem_.SetType(alias, Spell(fact->type));
 			out.push_back(alias);
 			continue;
 		}
 		if(model_.Get(fact->type).kind == kTypeFunction)
 		{
-			const int declaration = sem_.Add("function-declaration", name, true);
+			// A function declaration prints the qualified name the entity has,
+			// which is what makes `namespace n { int g(); }` read `n::g`.
+			const int declaration = sem_.Add("function-declaration",
+			                                 QualifiedEntityName(fact->entity), true);
 			sem_.SetType(declaration, BoundSpelling(fact->type, fact->scope));
 			out.push_back(declaration);
 			continue;
@@ -255,7 +258,7 @@ int Analyzer::SemVariable(int scope, const string& name, int entity, int type,
                           int initializer)
 {
 	const int variable = sem_.Add("variable", name, true);
-	sem_.SetType(variable, model_.Spelling(type));
+	sem_.SetType(variable, Spell(type));
 	const int built = SemInitializer(initializer, scope, type, name, entity);
 	if(built >= 0)
 	{
@@ -277,7 +280,7 @@ int Analyzer::SemInitializer(int node, int scope, int type, const string& name, 
 			Resolved object;
 			object.type = plain;
 			object.category = kLvalue;
-			object.node = sem_.Add("id-expression", kLvalue, model_.Spelling(plain), name);
+			object.node = sem_.Add("id-expression", kLvalue, Spell(plain), name);
 			return SemDefaultInitialization(object, plain, scope);
 		}
 		return -1;
@@ -293,7 +296,7 @@ int Analyzer::SemInitializer(int node, int scope, int type, const string& name, 
 		Resolved result = SemBracedInit(child, scope);
 		result.type = type;
 		result.category = kLvalue;
-		sem_.SetType(result.node, model_.Spelling(type));
+		sem_.SetType(result.node, Spell(type));
 		sem_.SetCategory(result.node, kLvalue);
 		return result.node;
 	}
@@ -309,7 +312,7 @@ int Analyzer::SemInitializer(int node, int scope, int type, const string& name, 
 			Resolved object;
 			object.type = plain;
 			object.category = kLvalue;
-			object.node = sem_.Add("id-expression", kLvalue, model_.Spelling(plain), name);
+			object.node = sem_.Add("id-expression", kLvalue, Spell(plain), name);
 			return SemDefaultInitialization(object, plain, scope);
 		}
 		throw SemanticError("a direct-initialisation takes one argument");
@@ -328,13 +331,13 @@ int Analyzer::SemDefaultInitialization(const Resolved& object, int class_type, i
 	const int constructor = ImplicitConstructor(class_type, scope);
 	const int action = sem_.Add("constructor-action", QualifiedEntityName(constructor), true);
 	const int call = sem_.Add("call-expression", kPrvalue,
-	                          model_.Spelling(model_.Fundamental(posttoken::FT_VOID)));
+	                          Spell(model_.Fundamental(posttoken::FT_VOID)));
 	const int callee = sem_.Add("callee", QualifiedEntityName(constructor), true);
 	const int class_scope = ClassScopeOf(class_type);
 	sem_.SetType(callee, BoundSpelling(model_.EntityOf(constructor).type, class_scope));
 	sem_.AddChild(call, callee);
 	const int address = sem_.Add("unary-expression", kPrvalue,
-	                             model_.Spelling(model_.Pointer(class_type)), "OP_AMP:&");
+	                             Spell(model_.Pointer(class_type)), "OP_AMP:&");
 	sem_.AddChild(address, object.node);
 	sem_.AddChild(call, address);
 	sem_.AddChild(action, call);
@@ -385,7 +388,7 @@ void Analyzer::SemanticsImplicitBodies()
 		                                QualifiedEntityName(constructor), true);
 		sem_.SetType(definition, BoundSpelling(model_.EntityOf(constructor).type, class_scope));
 		const int parameter = sem_.Add("parameter", "this", true);
-		sem_.SetType(parameter, model_.Spelling(model_.Pointer(class_type)));
+		sem_.SetType(parameter, Spell(model_.Pointer(class_type)));
 		sem_.AddChild(definition, parameter);
 		const int body = sem_.Add("compound-statement");
 		sem_.AddChild(definition, body);
@@ -431,7 +434,7 @@ int Analyzer::SemFunctionDefinition(int node, int scope)
 			}
 			CollectDeclaratorName(inner, name);
 			const int built = sem_.Add("parameter", name, true);
-			sem_.SetType(built, model_.Spelling(parameter->type));
+			sem_.SetType(built, Spell(parameter->type));
 			sem_.AddChild(definition, built);
 		}
 	}
@@ -457,7 +460,7 @@ int Analyzer::SemAliasDeclaration(int node, int scope)
 	const int alias = sem_.Add("type-alias", Label(node), true);
 	if(fact != 0)
 	{
-		sem_.SetType(alias, model_.Spelling(fact->type));
+		sem_.SetType(alias, Spell(fact->type));
 	}
 	return alias;
 }
@@ -747,7 +750,7 @@ int Analyzer::SemCondition(int node, int scope, bool switch_context)
 		throw SemanticError("unsupported condition declaration");
 	}
 	const int variable = sem_.Add("variable", name, true);
-	sem_.SetType(variable, model_.Spelling(fact->type));
+	sem_.SetType(variable, Spell(fact->type));
 	const int built_initializer = SemInitializer(initializer, scope, fact->type, name,
 	                                             fact->entity);
 	if(built_initializer >= 0)

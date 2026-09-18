@@ -359,6 +359,7 @@ private:
 	std::string QualifiedScopeName(int scope) const;
 	std::string QualifiedEntitySpelling(int entity) const;
 	std::string BoundSpelling(int type, int scope) const;
+	std::string Spell(int id) const;
 	bool IsScopedEnum(int type) const;
 
 	// --- values -----------------------------------------------------------
