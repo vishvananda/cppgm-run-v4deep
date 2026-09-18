@@ -8,9 +8,9 @@
 - Implementation commits: `f303ce5d` (the resolved-semantics layer, the tree,
   the dump and the driver), then the conversion, naming, statement and
   reference-binding increments listed under "Findings, changes and evidence",
-  then `edd6cbe8` (the function-template slice) and the four corrections the
-  slice's own probing found (`21fae408`, `23374e43`, `36a66bec` and the record
-  commit).
+  then `edd6cbe8` (the function-template slice) and the two corrections the
+  slice's own probing found (`23374e43`, `36a66bec`).  The records of those
+  increments are `21fae408` and `a76ef415`.
 - Target: `cppgm++ --emit-semantics -o <out> <src>...` runs translation phases
   1-7, the PA5 parse, the PA6 scope/type analysis, resolves expressions,
   statements, calls, conversions and the limited overload set, and writes the
