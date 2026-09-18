@@ -522,6 +522,13 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		bool added = false;
 		if(QualificationConvertible(source, parameter.base, added))
 		{
+			// 8.5.3/5: an lvalue reference to a non-cv type binds only an
+			// lvalue, so `int&` cannot take a prvalue.
+			if(!argument_lvalue && !result.rvalue_reference &&
+			   model_.Get(parameter.base).kind != kTypeCv)
+			{
+				return result;
+			}
 			result.rank = 4;
 			result.qualification = added;
 			result.bound_to_lvalue = argument_lvalue;
@@ -643,6 +650,14 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		{
 			result.rank = 2;
 			result.pointer_conversion = true;
+			result.lvalue_to_rvalue = true;
+			return result;
+		}
+		// 4.10/1: a null pointer constant also converts to `nullptr_t`.
+		if(from.null_zero && model_.Get(target).kind == kTypeFundamental &&
+		   model_.Get(target).base == posttoken::FT_NULLPTR_T)
+		{
+			result.rank = 2;
 			result.lvalue_to_rvalue = true;
 			return result;
 		}
@@ -1410,7 +1425,11 @@ Analyzer::Resolved Analyzer::SemBinary(int node, int scope)
 		const bool arithmetic = IsArithmeticType(left_type) && IsArithmeticType(right_type);
 		const bool pointers = (left_pointer || left_null) && (right_pointer || right_null) &&
 		                      (left_pointer || right_pointer);
-		if(!arithmetic && !pointers)
+		const bool nullptrs = model_.Get(left_type).kind == kTypeFundamental &&
+		                      model_.Get(left_type).base == posttoken::FT_NULLPTR_T &&
+		                      model_.Get(right_type).kind == kTypeFundamental &&
+		                      model_.Get(right_type).base == posttoken::FT_NULLPTR_T;
+		if(!arithmetic && !pointers && !nullptrs)
 		{
 			throw SemanticError("`" + op + "` needs comparable operands");
 		}
@@ -2118,17 +2137,28 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 	sem_.AddChild(result.node, callee);
 	for(size_t index = 0; index < arguments.size(); ++index)
 	{
-		// 4.10/1: an integer literal zero that becomes a pointer prints as the
-		// pointer it converted to.
-		if(arguments[index].null_zero)
+		const Conversion& conversion = viable[static_cast<size_t>(best)].conversions[index];
+		int argument = arguments[index].node;
+		if(conversion.temporary)
 		{
-			const int target = viable[static_cast<size_t>(best)].conversions[index].target;
+			// 13.3.3.1.4: the argument the reference binds is the converted
+			// temporary, which the dump shows as the conversion that made it.
+			const int converted = sem_.Add("cast-expression", kPrvalue,
+			                               Spell(conversion.target));
+			sem_.AddChild(converted, argument);
+			argument = converted;
+		}
+		else if(arguments[index].null_zero)
+		{
+			// 4.10/1: an integer literal zero that becomes a pointer prints as
+			// the pointer it converted to.
+			const int target = conversion.target;
 			if(target >= 0 && NullPointerTarget(ReferredType(target)) >= 0)
 			{
-				sem_.SetType(arguments[index].node, Spell(ReferredType(target)));
+				sem_.SetType(argument, Spell(ReferredType(target)));
 			}
 		}
-		sem_.AddChild(result.node, arguments[index].node);
+		sem_.AddChild(result.node, argument);
 	}
 	return result;
 }
