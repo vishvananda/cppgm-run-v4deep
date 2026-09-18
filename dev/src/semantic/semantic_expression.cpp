@@ -2569,9 +2569,11 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope, int target)
 	}
 	const string word = AfterColon(label);
 	const bool static_form = word == "static_cast";
-	if(static_form && model_.Same(operand.type, cast_type))
+	if(static_form && model_.Same(operand.type, cast_type) &&
+	   model_.Get(cast_type).kind == kTypeMemberPointer)
 	{
-		// A static_cast to the operand's own type is the operand itself.
+		// A static_cast of a member address to the member pointer type it
+		// already has denotes the address itself (5.2.9/9).
 		return operand;
 	}
 	if(static_form)
