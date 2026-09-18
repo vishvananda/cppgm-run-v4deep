@@ -178,26 +178,20 @@ bool Analyzer::DeduceArguments(int declared, int actual, map<int, int>& bindings
 	const Type pattern = model_.Get(declared);
 	if(pattern.kind == kTypeTemplateParameter)
 	{
-		// 14.8.2.1: a by-value parameter takes the argument's unqualified type,
-		// so a top-level cv on the argument is not what the parameter deduces.
-		int bare = actual;
-		if(model_.Get(bare).kind == kTypeCv)
-		{
-			bare = model_.Get(bare).base;
-		}
 		const map<int, int>::const_iterator found = bindings.find(declared);
 		if(found != bindings.end())
 		{
-			return model_.Same(found->second, bare);
+			return model_.Same(found->second, actual);
 		}
-		bindings[declared] = bare;
+		bindings[declared] = actual;
 		return true;
 	}
 	if(pattern.kind == kTypeCv)
 	{
-		// 14.8.2.1: the top-level cv of the argument is ignored where the
-		// parameter is cv-qualified, because the qualification is what the
-		// parameter adds rather than what it deduces.
+		// 14.8.2.5/2: the parameter's own cv-qualification absorbs the
+		// argument's, so both are dropped - which is why `f(const T&)` and
+		// `f(const T*)` take a `const int` argument as `int` while `f(T&)` and
+		// `f(T*)` both take it as `const int`.
 		int bare = actual;
 		if(model_.Get(bare).kind == kTypeCv)
 		{
@@ -254,6 +248,25 @@ bool Analyzer::DeduceArguments(int declared, int actual, map<int, int>& bindings
 		return DeduceArguments(pattern.base, function.base, bindings);
 	}
 	return model_.Same(model_.AdjustParameter(declared), model_.AdjustParameter(actual));
+}
+
+// 14.8.2.1/2: the top-level cv of an argument is ignored where the parameter is
+// not a reference, and 14.8.2.5 ignores it nowhere below that.  This is the one
+// place the argument is adjusted before the match, which is what makes `f(T)`
+// deduce `int` from a `const int` while `f(T*)` deduces `const int` from a
+// `const int*`.
+int Analyzer::DeductionSource(int declared, int actual) const
+{
+	if(declared < 0 || actual < 0)
+	{
+		return actual;
+	}
+	const Type pattern = model_.Get(declared);
+	if(pattern.kind == kTypeLvalueReference || pattern.kind == kTypeRvalueReference)
+	{
+		return actual;
+	}
+	return model_.Get(actual).kind == kTypeCv ? model_.Get(actual).base : actual;
 }
 
 // 14.2: a simple-template-id is a name followed by an argument list.  The
@@ -412,7 +425,9 @@ Analyzer::Resolved Analyzer::SemTemplateId(int node, int scope, const string& na
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 		{
 			const int type = ResolveTemplateArgument(scope, arguments[argument]);
-			if(!DeduceArguments(record.parameters[argument], type, match.bindings))
+			if(!DeduceArguments(record.parameters[argument],
+			                    DeductionSource(record.parameters[argument], type),
+			                    match.bindings))
 			{
 				deduced = false;
 				break;
@@ -482,8 +497,9 @@ Analyzer::Resolved Analyzer::SemTemplateCall(int node, int scope, const string& 
 		bool deduced = true;
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 		{
-			if(!DeduceArguments(declared.params[argument], SourceType(arguments[argument]),
-			                    bindings))
+			const int source = DeductionSource(declared.params[argument],
+			                                   SourceType(arguments[argument]));
+			if(!DeduceArguments(declared.params[argument], source, bindings))
 			{
 				deduced = false;
 				break;
@@ -549,7 +565,9 @@ Analyzer::Resolved Analyzer::SemExplicitTemplateCall(int node, int scope,
 		for(size_t argument = 0; argument < arguments.size(); ++argument)
 		{
 			const int type = ResolveTemplateArgument(scope, arguments[argument]);
-			if(!DeduceArguments(record.parameters[argument], type, bindings))
+			if(!DeduceArguments(record.parameters[argument],
+			                    DeductionSource(record.parameters[argument], type),
+			                    bindings))
 			{
 				deduced = false;
 				break;

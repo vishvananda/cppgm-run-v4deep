@@ -14,9 +14,11 @@
 # ranks over which, what a reference binding does with a temporary and with a
 # base subobject, how a member's cv-qualifiers reach the object it is reached
 # through, what the value category of each operator form is, and which of the
-# call and control-flow violations the handout requires PA7 to reject.  Each
-# case says what the two readings of it are, because the point of the case is
-# the choice.
+# call and control-flow violations the handout requires PA7 to reject, plus the
+# function-template corners the one fixture that reaches templates pulls in:
+# which specialization a template-id names, what a call deduces, and which
+# specializations the dump shows.  Each case says what the two readings of it
+# are, because the point of the case is the choice.
 #
 # A difference is reported, never repaired: the reference is the oracle, and a
 # case the reference itself reads oddly is a review question rather than a
@@ -287,6 +289,26 @@ SRC
 template<class T> void hello(T);
 template<class T> void take(T);
 void use() { unsigned long n = sizeof(&hello<int>); (void)n; take(&hello<int>); }
+SRC
+	'deduction-drops-the-arguments-cv-for-a-value-parameter' => [ '14.8.2.1/2 ignores it where the parameter is not a reference', <<'SRC' ],
+template<class T> void take(T);
+void use() { const int x = 1; take(x); }
+SRC
+	'deduction-keeps-the-arguments-cv-through-a-reference' => [ '14.8.2.1/2 keeps it where the parameter is one', <<'SRC' ],
+template<class T> void take(T&);
+void use() { const int x = 1; take(x); }
+SRC
+	'a-cv-qualified-parameter-absorbs-the-arguments-cv' => [ '14.8.2.5/2 drops both where the parameter writes it', <<'SRC' ],
+template<class T> void take(const T&);
+void use() { const int x = 1; take(x); }
+SRC
+	'deduction-keeps-the-pointees-cv' => [ '14.8.2.5 ignores the argument cv nowhere below the top level', <<'SRC' ],
+template<class T> void take(T*);
+void use() { const int* p = 0; take(p); }
+SRC
+	'a-cv-qualified-pointee-absorbs-the-arguments-cv' => [ '14.8.2.5/2 drops both at the pointee', <<'SRC' ],
+template<class T> void take(const T*);
+void use() { const int* p = 0; take(p); }
 SRC
 );
 

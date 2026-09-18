@@ -398,6 +398,7 @@ private:
 	int InstantiateFunctionTemplate(int which, const std::map<int, int>& bindings);
 	int SubstituteType(int type, const std::map<int, int>& bindings) const;
 	bool DeduceArguments(int declared, int actual, std::map<int, int>& bindings) const;
+	int DeductionSource(int declared, int actual) const;
 	bool SplitTemplateId(const std::string& text, std::string& name,
 	                     std::vector<std::string>& arguments) const;
 	int ResolveTemplateArgument(int scope, const std::string& text);
