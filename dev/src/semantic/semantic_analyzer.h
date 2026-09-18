@@ -354,7 +354,8 @@ private:
 	Conversion Convert(const Resolved& from, int target, int scope);
 	int SourceType(const Resolved& from) const;
 	bool QualificationConvertible(int from, int to, bool& added) const;
-	bool PointerCompatible(int from, int to, bool& proper_subsequence) const;
+	bool PointerCompatible(int from, int to, bool& proper_subsequence,
+	                       bool* derived_to_base = 0) const;
 	int CompareConversions(const Conversion& a, const Conversion& b) const;
 	bool BetterSequence(const std::vector<Conversion>& a,
 	                    const std::vector<Conversion>& b) const;

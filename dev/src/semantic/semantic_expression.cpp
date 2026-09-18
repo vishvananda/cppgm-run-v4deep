@@ -693,13 +693,15 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 	if(model_.Get(source).kind == kTypePointer && model_.Get(target).kind == kTypePointer)
 	{
 		bool proper = false;
-		if(!PointerCompatible(source, target, proper))
+		bool base = false;
+		if(!PointerCompatible(source, target, proper, &base))
 		{
 			return result;
 		}
 		result.rank = 2;
 		result.pointer_conversion = true;
 		result.proper_subsequence = proper;
+		result.derived_to_base = base;
 		result.lvalue_to_rvalue = true;
 		return result;
 	}
@@ -707,13 +709,15 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 	   model_.Get(target).kind == kTypeMemberPointer)
 	{
 		bool proper = false;
-		if(!PointerCompatible(source, target, proper))
+		bool base = false;
+		if(!PointerCompatible(source, target, proper, &base))
 		{
 			return result;
 		}
 		result.rank = 2;
 		result.pointer_conversion = true;
 		result.proper_subsequence = proper;
+		result.derived_to_base = base;
 		result.lvalue_to_rvalue = true;
 		return result;
 	}
@@ -722,9 +726,14 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 
 // 4.10/3: `T*` converts to `void*` and to a cv-qualified `void*`, and a derived
 // pointer converts to a base pointer; the pointee qualification may only grow.
-bool Analyzer::PointerCompatible(int from, int to, bool& proper_subsequence) const
+bool Analyzer::PointerCompatible(int from, int to, bool& proper_subsequence,
+                                bool* derived_to_base) const
 {
 	proper_subsequence = false;
+	if(derived_to_base != 0)
+	{
+		*derived_to_base = false;
+	}
 	int s = from;
 	int r = to;
 	int s_quals = 0;
@@ -749,7 +758,8 @@ bool Analyzer::PointerCompatible(int from, int to, bool& proper_subsequence) con
 		{
 			return false;
 		}
-		return PointerCompatible(model_.Get(s).member, model_.Get(r).member, proper_subsequence);
+		return PointerCompatible(model_.Get(s).member, model_.Get(r).member, proper_subsequence,
+		                         derived_to_base);
 	}
 	if(model_.Get(s).kind != kTypePointer)
 	{
@@ -805,6 +815,10 @@ bool Analyzer::PointerCompatible(int from, int to, bool& proper_subsequence) con
 		return false;
 	}
 	proper_subsequence = source_cv != target_cv;
+	if(derived_to_base != 0)
+	{
+		*derived_to_base = true;
+	}
 	return true;
 }
 
@@ -838,6 +852,29 @@ int Analyzer::CompareConversions(const Conversion& a, const Conversion& b) const
 	if(a.reference && b.reference && a.temporary != b.temporary)
 	{
 		return a.temporary ? -1 : 1;
+	}
+	// 13.3.3.2/3: two references to the same type that differ only in top-level
+	// cv-qualification are ranked by which is less qualified.
+	if(a.reference && b.reference)
+	{
+		int referred_a = ReferredType(a.target);
+		int referred_b = ReferredType(b.target);
+		int quals_a = 0;
+		int quals_b = 0;
+		if(model_.Get(referred_a).kind == kTypeCv)
+		{
+			quals_a = model_.Get(referred_a).quals;
+			referred_a = model_.Get(referred_a).base;
+		}
+		if(model_.Get(referred_b).kind == kTypeCv)
+		{
+			quals_b = model_.Get(referred_b).quals;
+			referred_b = model_.Get(referred_b).base;
+		}
+		if(referred_a == referred_b && quals_a != quals_b)
+		{
+			return quals_a < quals_b ? 1 : -1;
+		}
 	}
 	if(a.proper_subsequence != b.proper_subsequence)
 	{
@@ -1409,7 +1446,7 @@ Analyzer::Resolved Analyzer::SemBinary(int node, int scope)
 {
 	const string op = OperatorWord(Label(node));
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
-	const Resolved right = SemExpr(ChildAt(node, 1), scope);
+	Resolved right = SemExpr(ChildAt(node, 1), scope);
 	Resolved result;
 	int left_type = ReferredType(left.type);
 	int right_type = ReferredType(right.type);
@@ -1570,7 +1607,7 @@ Analyzer::Resolved Analyzer::SemAssignment(int node, int scope)
 {
 	const string op = OperatorWord(Label(node));
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
-	const Resolved right = SemExpr(ChildAt(node, 1), scope);
+	Resolved right = SemExpr(ChildAt(node, 1), scope);
 	if(left.category != kLvalue || !IsScalarType(ReferredType(left.type)))
 	{
 		throw SemanticError("the left operand of `" + op + "` must be a modifiable lvalue");
@@ -1582,6 +1619,19 @@ Analyzer::Resolved Analyzer::SemAssignment(int node, int scope)
 		if(conversion.rank == 0)
 		{
 			throw SemanticError("the right operand of `=` does not convert to the left type");
+		}
+		if(conversion.derived_to_base)
+		{
+			// A derived-to-base pointer conversion is a cast to the base.
+			const int converted = sem_.Add("cast-expression", kPrvalue,
+			                               Spell(ReferredType(conversion.target)));
+			sem_.AddChild(converted, right.node);
+			right = Resolved();
+			right.node = converted;
+		}
+		else if(right.null_zero && NullPointerTarget(ReferredType(left_type)) >= 0)
+		{
+			sem_.SetType(right.node, Spell(ReferredType(left_type)));
 		}
 	}
 	else
@@ -1733,7 +1783,7 @@ Analyzer::Resolved Analyzer::SemConditional(int node, int scope)
 Analyzer::Resolved Analyzer::SemSubscript(int node, int scope)
 {
 	const Resolved left = SemExpr(ChildAt(node, 0), scope);
-	const Resolved right = SemExpr(ChildAt(node, 1), scope);
+	Resolved right = SemExpr(ChildAt(node, 1), scope);
 	int array_side = -1;
 	int index_side = -1;
 	const int left_type = ReferredType(left.type);
@@ -1893,7 +1943,7 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	}
 	// 5.2.5: the dump names the member the operator selected, so the label is
 	// the operator's kind and the member's own name.
-	const string prefix = label.compare(0, 7, "OP_ARROW") == 0 ? "OP_ARROW:" : "OP_DOT:";
+	const string prefix = label.compare(0, 8, "OP_ARROW") == 0 ? "OP_ARROW:" : "OP_DOT:";
 	result.node = sem_.Add("member-expression", result.category, Spell(result.type),
 	                       prefix + member_name);
 	sem_.AddChild(result.node, object.node);
