@@ -1533,6 +1533,16 @@ Analyzer::Resolved Analyzer::SemConditional(int node, int scope)
 	}
 	int left_type = ReferredType(left.type);
 	int right_type = ReferredType(right.type);
+	// 4.1: the operands of `?:` are compared as the unqualified types they
+	// would take as prvalues.
+	if(model_.Get(left_type).kind == kTypeCv)
+	{
+		left_type = model_.Get(left_type).base;
+	}
+	if(model_.Get(right_type).kind == kTypeCv)
+	{
+		right_type = model_.Get(right_type).base;
+	}
 	if(model_.Get(left_type).kind == kTypeArray)
 	{
 		left_type = model_.Pointer(model_.Get(left_type).base);

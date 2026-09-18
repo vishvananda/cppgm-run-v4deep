@@ -816,6 +816,9 @@ void Analyzer::AnalyzeFunctionDefinition(int node, int scope, bool defer)
 		record.parameters = names;
 		record.body = body;
 		pending_.push_back(record);
+		// PA7 prints a member body after the unit's own declarations, so the
+		// declarator is kept for the dump to walk again.
+		deferred_bodies_.push_back(declarator);
 		return;
 	}
 	OpenFunctionScope(target, name, names, body);

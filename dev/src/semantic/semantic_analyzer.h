@@ -294,7 +294,7 @@ private:
 	// --- the declaration walk --------------------------------------------
 	void SemDeclaration(int node, int scope, std::vector<int>& out);
 	void SemSimpleDeclaration(int node, int scope, std::vector<int>& out);
-	int SemFunctionDefinition(int node, int scope);
+	int SemFunctionDefinition(int node, int scope, int declarator = -1);
 	int SemNamespaceDefinition(int node, int scope);
 	int SemAliasDeclaration(int node, int scope);
 	int SemTemplateDeclaration(int node, int scope);
@@ -386,6 +386,7 @@ private:
 	const std::vector<syntax::SyntaxLiteralFacts>& literals_;
 	std::map<std::pair<int, int>, std::set<std::string> > defined_functions_;
 	std::vector<PendingBody> pending_;
+	std::vector<int> deferred_bodies_;
 	long long anonymous_enums_;
 	long long local_classes_;
 	bool semantics_mode_;

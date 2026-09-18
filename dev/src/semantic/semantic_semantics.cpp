@@ -477,6 +477,17 @@ int Analyzer::ImplicitConstructor(int class_type, int scope)
 
 void Analyzer::SemanticsImplicitBodies()
 {
+	// A member body written inside its class is a complete-class context, so
+	// the analysis read it after the member list; the dump prints it after the
+	// unit's own declarations, which is where the reference puts it.
+	for(size_t index = 0; index < deferred_bodies_.size(); ++index)
+	{
+		const int definition = SemFunctionDefinition(0, 0, deferred_bodies_[index]);
+		if(definition >= 0)
+		{
+			sem_.AddChild(sem_root_, definition);
+		}
+	}
 	for(size_t index = 0; index < implicit_classes_.size(); ++index)
 	{
 		const int class_type = implicit_classes_[index];
@@ -494,11 +505,21 @@ void Analyzer::SemanticsImplicitBodies()
 	}
 }
 
-int Analyzer::SemFunctionDefinition(int node, int scope)
+int Analyzer::SemFunctionDefinition(int node, int scope, int declarator)
 {
 	(void)scope;
-	const int declarator = FindChild(node, "declarator");
-	const int body = FindChild(node, "compound-statement");
+	int body = -1;
+	if(declarator < 0)
+	{
+		declarator = FindChild(node, "declarator");
+		body = FindChild(node, "compound-statement");
+	}
+	else
+	{
+		// A deferred member body is reached by its declarator, and the body is
+		// the one the class's member list held for it.
+		body = FindChild(node, "compound-statement");
+	}
 	const Model::DeclarationFact* fact = model_.DeclarationAt(declarator);
 	if(fact == 0)
 	{
@@ -507,6 +528,17 @@ int Analyzer::SemFunctionDefinition(int node, int scope)
 	const int definition = sem_.Add("function-definition", QualifiedEntityName(fact->entity),
 	                                true);
 	sem_.SetType(definition, BoundSpelling(fact->type, fact->scope));
+	// 9.3.1/3: a non-static member function takes an implicit object parameter,
+	// which the dump writes out before the declared ones.
+	if(model_.ScopeOf(fact->scope).kind == kScopeClass)
+	{
+		const int class_entity = model_.ScopeOf(fact->scope).entity;
+		const int class_type = model_.EntityOf(class_entity).type;
+		const int qualified = model_.Qualified(model_.Get(fact->type).quals, class_type);
+		const int built = sem_.Add("parameter", "this", true);
+		sem_.SetType(built, Spell(model_.Pointer(qualified)));
+		sem_.AddChild(definition, built);
+	}
 	const int clause = FindChild(declarator, "parameter-clause");
 	if(clause >= 0)
 	{
@@ -547,6 +579,10 @@ int Analyzer::SemFunctionDefinition(int node, int scope)
 	return_type_ = model_.Get(fact->type).base;
 	return_is_void_ = model_.Get(return_type_).kind == kTypeFundamental &&
 	                  model_.Get(return_type_).base == posttoken::FT_VOID;
+	if(body < 0)
+	{
+		return definition;
+	}
 	const int built = SemCompoundStatement(body, model_.ScopeAt(body));
 	sem_.AddChild(definition, built);
 	return definition;
