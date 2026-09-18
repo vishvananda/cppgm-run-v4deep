@@ -155,6 +155,17 @@ int Analyzer::SemSpecialMember(int node, int scope)
 	const int definition = sem_.Add("function-definition", QualifiedEntityName(fact->entity),
 	                                true);
 	sem_.SetType(definition, BoundSpelling(fact->type, fact->scope));
+	// 9.3.1/3: a special member is a non-static member function, so its
+	// definition writes the implicit object parameter first.
+	if(model_.ScopeOf(fact->scope).kind == kScopeClass)
+	{
+		const int class_entity = model_.ScopeOf(fact->scope).entity;
+		const int class_type = model_.EntityOf(class_entity).type;
+		const int qualified = model_.Qualified(model_.Get(fact->type).quals, class_type);
+		const int built = sem_.Add("parameter", "this", true);
+		sem_.SetType(built, Spell(model_.Pointer(qualified)));
+		sem_.AddChild(definition, built);
+	}
 	const int clause = FindChild(declarator, "parameter-clause");
 	if(clause >= 0)
 	{

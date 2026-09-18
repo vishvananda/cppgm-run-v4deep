@@ -534,6 +534,35 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 			result.lvalue_to_rvalue = false;
 			return result;
 		}
+		// 13.3.3.1.4/3: a derived class lvalue binds a reference to its base by
+		// a derived-to-base conversion, which the dump shows as a cast.
+		{
+			int referred_class = parameter.base;
+			int referred_cv = 0;
+			if(model_.Get(referred_class).kind == kTypeCv)
+			{
+				referred_cv = model_.Get(referred_class).quals;
+				referred_class = model_.Get(referred_class).base;
+			}
+			int source_class = source;
+			int source_cv = 0;
+			if(model_.Get(source_class).kind == kTypeCv)
+			{
+				source_cv = model_.Get(source_class).quals;
+				source_class = model_.Get(source_class).base;
+			}
+			if(model_.Get(referred_class).kind == kTypeClass &&
+			   model_.Get(source_class).kind == kTypeClass &&
+			   (source_cv & ~referred_cv) == 0 &&
+			   model_.DerivesFrom(source_class, referred_class) &&
+			   source_class != referred_class)
+			{
+				result.rank = 2;
+				result.derived_to_base = true;
+				result.bound_to_lvalue = argument_lvalue;
+				return result;
+			}
+		}
 		// 13.3.3.1.4: an argument that is not reference-compatible is first
 		// converted to the referred type, and the reference binds the result.
 		// The result is a prvalue, so only a reference to a cv-qualified type
@@ -1826,16 +1855,24 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	string qualifier;
 	string member_name;
 	SplitQualifiedName(qualified, qualifier, member_name);
+	int search = class_type;
 	int class_scope = ClassScopeOf(class_type);
 	if(!qualifier.empty())
 	{
-		class_scope = model_.ResolveQualifier(scope, qualifier);
+		search = model_.ResolveQualifier(scope, qualifier);
+		class_scope = search;
 	}
 	if(class_scope < 0)
 	{
 		throw SemanticError("`" + qualified + "` does not name a class member");
 	}
-	const int member = model_.LookupValueIn(class_scope, member_name);
+	int member = model_.LookupValueIn(class_scope, member_name);
+	if(member < 0)
+	{
+		// 10/1: a member of a base class is a member of the derived one, so an
+		// unqualified member name searches the base classes too.
+		member = FindMemberInBases(search < 0 ? class_type : search, member_name);
+	}
 	if(member < 0)
 	{
 		throw SemanticError("no member `" + member_name + "`");
@@ -1861,6 +1898,43 @@ Analyzer::Resolved Analyzer::SemMember(int node, int scope)
 	                       prefix + member_name);
 	sem_.AddChild(result.node, object.node);
 	return result;
+}
+
+// A member of a class or of one of its bases, searched depth first.
+int Analyzer::FindMemberInBases(int class_type, const string& name) const
+{
+	int type = class_type;
+	if(model_.Get(type).kind == kTypeCv)
+	{
+		type = model_.Get(type).base;
+	}
+	if(model_.Get(type).kind != kTypeClass)
+	{
+		return -1;
+	}
+	const int scope = model_.Get(type).decl_scope;
+	if(scope >= 0)
+	{
+		const int found = model_.LookupValueIn(scope, name);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	const vector<int>* bases = model_.BasesOf(type);
+	if(bases == 0)
+	{
+		return -1;
+	}
+	for(size_t index = 0; index < bases->size(); ++index)
+	{
+		const int found = FindMemberInBases((*bases)[index], name);
+		if(found >= 0)
+		{
+			return found;
+		}
+	}
+	return -1;
 }
 
 // The class scope a class type owns, or -1.
@@ -2151,6 +2225,14 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 			// 13.3.3.1.4: the argument the reference binds is the converted
 			// temporary, which the dump shows as the conversion that made it.
 			const int converted = sem_.Add("cast-expression", kPrvalue,
+			                               Spell(ReferredType(conversion.target)));
+			sem_.AddChild(converted, argument);
+			argument = converted;
+		}
+		else if(conversion.derived_to_base)
+		{
+			// A derived-to-base binding is a cast to the base lvalue.
+			const int converted = sem_.Add("cast-expression", arguments[index].category,
 			                               Spell(ReferredType(conversion.target)));
 			sem_.AddChild(converted, argument);
 			argument = converted;

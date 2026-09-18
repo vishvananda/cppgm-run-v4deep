@@ -263,6 +263,7 @@ private:
 		bool boolean_conversion;
 		bool proper_subsequence;
 		bool temporary;       // the reference bound a converted temporary
+		bool derived_to_base; // the reference bound a base subobject
 		int target;
 
 		Conversion()
@@ -276,6 +277,7 @@ private:
 			, boolean_conversion(false)
 			, proper_subsequence(false)
 			, temporary(false)
+			, derived_to_base(false)
 			, target(-1)
 		{}
 	};
@@ -339,6 +341,7 @@ private:
 	                           const std::vector<Resolved>& arguments);
 	int MemberClassOf(int entity) const;
 	int ClassScopeOf(int class_type) const;
+	int FindMemberInBases(int class_type, const std::string& name) const;
 	int SemArgumentList(int node, int scope, std::vector<Resolved>& out);
 	Resolved SemIndirectCall(int node, int scope, const Resolved& callee,
 	                         const std::vector<Resolved>& arguments);
