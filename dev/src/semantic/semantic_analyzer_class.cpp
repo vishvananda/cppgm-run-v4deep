@@ -97,6 +97,7 @@ int Analyzer::FindOrCreateObject(int scope, const string& name, int type)
 	}
 	const int entity = model_.NewEntity(kEntityObject, name);
 	model_.EntityOf(entity).type = type;
+	model_.EntityOf(entity).decl_scope = scope;
 	model_.BindValue(scope, name, entity);
 	return entity;
 }
@@ -124,6 +125,7 @@ int Analyzer::FindOrCreateFunction(int scope, const string& name, int type)
 	}
 	const int entity = model_.NewEntity(kEntityFunction, name);
 	model_.EntityOf(entity).type = type;
+	model_.EntityOf(entity).decl_scope = scope;
 	model_.BindValue(scope, name, entity);
 	return entity;
 }
@@ -284,7 +286,9 @@ int Analyzer::AnalyzeClassSpecifier(int node, int scope, const string& declared_
 	string written = Label(node);
 	if(written.empty())
 	{
-		written = names_the_type ? declared_name : AnonymousClassName(node);
+		written = names_the_type
+		    ? (semantics_mode_ ? LocalClassName() : declared_name)
+		    : AnonymousClassName(node);
 	}
 	const int entity = DeclareClass(scope, written, key, true);
 	if(model_.Get(model_.EntityOf(entity).type).complete)
@@ -298,6 +302,23 @@ int Analyzer::AnalyzeClassSpecifier(int node, int scope, const string& declared_
 		AddTypeBinding(scope, written, entity, key, -1);
 	}
 	const int class_scope = model_.ScopeFor(scope, entity, kScopeClass, written);
+	// 10/1: the base-clause names the direct bases, which a derived-to-base
+	// conversion and a qualified member access both read back.
+	const int class_type = model_.EntityOf(entity).type;
+	const int base_clause = FindChild(node, "base-clause");
+	if(base_clause >= 0)
+	{
+		const vector<int> specifiers = ChildrenOf(base_clause);
+		for(size_t index = 0; index < specifiers.size(); ++index)
+		{
+			const int base_name = FindChild(specifiers[index], "base-name");
+			if(base_name < 0)
+			{
+				continue;
+			}
+			model_.AddBase(class_type, ResolveTypeName(scope, Label(base_name), false, false));
+		}
+	}
 	ProcessClassBody(node, class_scope);
 	// 9.4/1: the class is complete at the closing brace, so a member body may
 	// name a member declared later in it.
@@ -389,6 +410,11 @@ void Analyzer::OpenFunctionScope(int owner, const string& name,
 		binding.name = parameters[index].first;
 		binding.type = parameters[index].second;
 		model_.AddBinding(function_scope, binding);
+		// 3.3.3/1: a parameter's name is visible in the function body, so the
+		// parameter takes part in ordinary lookup like any other declaration.
+		model_.BindValue(function_scope, binding.name, model_.NewEntity(kEntityObject,
+		                                                               binding.name));
+		model_.EntityOf(model_.LookupValue(function_scope, binding.name)).type = binding.type;
 	}
 	AnalyzeCompoundStatement(body, function_scope);
 }
@@ -587,6 +613,7 @@ void Analyzer::BindEnumerators(int node, int enum_scope, int enum_type)
 		}
 		const int value_entity = model_.NewEntity(kEntityEnumerator, enumerator_name);
 		model_.EntityOf(value_entity).type = enum_type;
+		model_.EntityOf(value_entity).decl_scope = enum_scope;
 		model_.EntityOf(value_entity).has_value = true;
 		model_.EntityOf(value_entity).value = next;
 		Binding binding;
@@ -663,7 +690,9 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 			model_.AddBinding(target, binding);
 			const int entity = model_.NewEntity(kEntityAlias, name);
 			model_.EntityOf(entity).type = type;
+			model_.EntityOf(entity).decl_scope = target;
 			model_.BindType(target, name, entity);
+			model_.NoteDeclaration(declarator, type, entity, target);
 			continue;
 		}
 		if(model_.Get(type).kind == kTypeFunction)
@@ -676,6 +705,7 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 			binding.type = type;
 			binding.entity = entity;
 			model_.AddBinding(target, binding);
+			model_.NoteDeclaration(declarator, type, entity, target);
 			continue;
 		}
 		// 3.9.1/9: void is incomplete and can never be completed, so no object
@@ -704,6 +734,7 @@ void Analyzer::AnalyzeSimpleDeclaration(int node, int scope, int enclosing_class
 		binding.type = type;
 		binding.entity = entity;
 		model_.AddBinding(target, binding);
+		model_.NoteDeclaration(declarator, type, entity, target);
 		// 9.2: a non-static data member takes part in its class's layout, in
 		// declaration order.  A static or thread-local member is not part of the
 		// object (9.4.2/1), so it is not recorded here.
@@ -762,6 +793,7 @@ void Analyzer::AnalyzeFunctionDefinition(int node, int scope, bool defer)
 	binding.type = type;
 	binding.entity = entity;
 	model_.AddBinding(target, binding);
+	model_.NoteDeclaration(declarator, type, entity, target);
 	if(body < 0)
 	{
 		return;
@@ -806,6 +838,7 @@ void Analyzer::AnalyzeSpecialMember(int node, int scope, int enclosing_class)
 	binding.type = type;
 	binding.entity = entity;
 	model_.AddBinding(target, binding);
+	model_.NoteDeclaration(declarator, type, entity, target);
 	if(body < 0)
 	{
 		return;
@@ -852,6 +885,7 @@ void Analyzer::AnalyzeBitField(int node, int scope)
 	binding.type = type;
 	binding.entity = entity;
 	model_.AddBinding(scope, binding);
+	model_.NoteDeclaration(declarator, type, entity, scope);
 	if(model_.ScopeOf(scope).kind == kScopeClass)
 	{
 		model_.ScopeOf(scope).members.push_back(entity);
@@ -895,7 +929,9 @@ bool IsSubstatement(const string& parent, const string& child)
 
 void Analyzer::AnalyzeCompoundStatement(int node, int scope)
 {
-	AnalyzeStatements(node, model_.NewScope(kScopeBlock, "", scope));
+	const int block = model_.NewScope(kScopeBlock, "", scope);
+	model_.NoteScope(node, block);
+	AnalyzeStatements(node, block);
 }
 
 // The contents of one block scope: declarations bind in it and statements are
@@ -929,6 +965,7 @@ void Analyzer::AnalyzeStatements(int node, int block)
 // selection or iteration opens a scope of its own inside it.
 void Analyzer::AnalyzeSlotStatement(int node, int slot)
 {
+	model_.NoteScope(node, slot);
 	const string& tag = Tag(node);
 	if(IsDeclarationTag(tag))
 	{
@@ -1043,6 +1080,7 @@ void Analyzer::AnalyzeStatement(int node, int scope)
 	                        tag == "while-statement" || tag == "do-statement" ||
 	                        tag == "for-statement" || tag == "handler";
 	const int inner = owns_scope ? model_.NewScope(kScopeBlock, "", scope) : scope;
+	model_.NoteScope(node, inner);
 	const vector<int> children = ChildrenOf(node);
 	for(size_t index = 0; index < children.size(); ++index)
 	{

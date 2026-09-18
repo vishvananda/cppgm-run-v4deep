@@ -13,6 +13,7 @@ namespace semantic
 {
 
 class Model;
+class SemTree;
 
 // Writes `translation units`' count and one `start`/`end` framed scope tree per
 // source, in command-line order.  Each translation unit is analysed on its own,
@@ -20,8 +21,13 @@ class Model;
 // on a preprocessing, parse or semantic failure.
 void EmitTypes(const std::vector<std::string>& sources, const std::string& outfile);
 
+// The PA7 counterpart: the same phases and the same analysis, followed by the
+// resolved-tree dump.
+void EmitSemantics(const std::vector<std::string>& sources, const std::string& outfile);
+
 // The body of one translation unit's dump, rooted at `translation-unit`.
 void WriteScopeTree(std::ostream& out, const Model& model);
+void WriteSemanticsTree(std::ostream& out, const SemTree& tree, int root);
 
 }  // namespace semantic
 }  // namespace cppgm

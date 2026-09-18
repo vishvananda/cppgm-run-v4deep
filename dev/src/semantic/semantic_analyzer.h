@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "semantic/semantic_model.h"
+#include "semantic/semantics_tree.h"
 #include "syntax/syntax_arena.h"
 #include "syntax/syntax_token.h"
 
@@ -103,6 +104,14 @@ public:
 	// Analyses one translation unit's tree into the model's global scope.
 	void Run(int root);
 
+	// PA7 gives an unnamed class type a synthetic name of its own rather than
+	// the name of the declarator that uses it, so the class and the object it
+	// declares are two different names.  The dump mode selects that reading.
+	void SetSemanticsMode(bool semantics)
+	{
+		semantics_mode_ = semantics;
+	}
+
 	// --- tree access ------------------------------------------------------
 	const std::string& Tag(int node) const;
 	const std::string& Label(int node) const;
@@ -134,6 +143,7 @@ private:
 	void AnalyzeSpecifiers(int node, int scope, Specifiers& out,
 	                       const std::string& declared_name, bool declare_introduced);
 	int BuildDeclarator(int node, int base, int scope);
+	int MemberPointerClass(const std::string& spelling, int scope);
 	int BuildParameterClause(int node, int scope, std::vector<int>& params, bool& varargs,
 	                         std::vector<std::pair<std::string, int> >* names);
 	int BuildSuffix(int node, int base, int scope, int quals, int func_ref);
@@ -185,7 +195,6 @@ private:
 	int EvaluateDecltype(int node, int scope);
 	long long ArrayBound(int node, int scope);
 	long long TruncateTo(long long value, int fundamental) const;
-	bool IsScopedEnum(int type) const;
 
 	// --- helpers ----------------------------------------------------------
 	void AddTypeBinding(int scope, const std::string& name, int entity, int class_key,
@@ -193,8 +202,178 @@ private:
 	int FundamentalFromSpecifiers(const std::vector<std::string>& words) const;
 	std::string AnonymousClassName(int node);
 	std::string AnonymousEnumName();
+	std::string LocalClassName();
 	int CurrentEntityScope(int scope, const std::string& qualifier);
 	void CheckQualifiedDefinition(int site, int target);
+
+	// --- PA7: the resolved-tree dump --------------------------------------
+public:
+	// Walks the analysed tree again and builds the resolved dump.
+	void BuildSemantics(int root);
+
+	SemTree& SemanticsTree()
+	{
+		return sem_;
+	}
+
+private:
+	// An expression's resolved type, value category and the declaration it
+	// denotes.  `node` is the tree node the expression printed as.
+	struct Resolved
+	{
+		int node;
+		int type;
+		int category;
+		int entity;      // the declaration an id-expression denotes, or -1
+		int function;    // the function an expression denotes, or -1
+		bool overloaded; // the name denotes more than one function
+		bool type_name;  // the id-expression named a type rather than a value
+		bool null_zero;  // an integer literal zero, the null pointer constant
+		bool has_value;  // a propagated integral constant
+		long long value;
+
+		Resolved()
+			: node(-1)
+			, type(-1)
+			, category(kPrvalue)
+			, entity(-1)
+			, function(-1)
+			, overloaded(false)
+			, type_name(false)
+			, null_zero(false)
+			, has_value(false)
+			, value(0)
+		{}
+	};
+
+	// One standard conversion sequence (13.3.3.1.1) from an argument to a
+	// parameter.
+	struct Conversion
+	{
+		int rank;             // 0 none, 1 ellipsis, 2 conversion, 3 promotion, 4 exact
+		bool lvalue_to_rvalue;
+		bool qualification;   // 4.4
+		bool reference;       // the parameter is a reference
+		bool rvalue_reference;
+		bool bound_to_lvalue; // the reference bound an lvalue
+		bool pointer_conversion;
+		bool boolean_conversion;
+		bool proper_subsequence;
+		int target;
+
+		Conversion()
+			: rank(0)
+			, lvalue_to_rvalue(false)
+			, qualification(false)
+			, reference(false)
+			, rvalue_reference(false)
+			, bound_to_lvalue(false)
+			, pointer_conversion(false)
+			, boolean_conversion(false)
+			, proper_subsequence(false)
+			, target(-1)
+		{}
+	};
+
+	// A function the call layer is choosing between.
+	struct Candidate
+	{
+		int entity;
+		int type;   // the function's declared type
+		int scope;  // the scope the declaration was found in
+
+		Candidate()
+			: entity(-1)
+			, type(-1)
+			, scope(-1)
+		{}
+	};
+
+	// --- the declaration walk --------------------------------------------
+	void SemDeclaration(int node, int scope, std::vector<int>& out);
+	void SemSimpleDeclaration(int node, int scope, std::vector<int>& out);
+	int SemFunctionDefinition(int node, int scope);
+	int SemNamespaceDefinition(int node, int scope);
+	int SemAliasDeclaration(int node, int scope);
+	int SemTemplateDeclaration(int node, int scope);
+	void SemLinkageSpecification(int node, int scope, std::vector<int>& out);
+	int SemMemberPointerTarget(int node, int scope);
+	int SemInitializer(int node, int scope, int type, const std::string& name,
+	                   int entity);
+	int SemVariable(int scope, const std::string& name, int entity, int type,
+	                int initializer);
+	int SemAnonymousUnionStorage(int specifier, int scope);
+
+	// --- statements -------------------------------------------------------
+	int SemStatement(int node, int scope);
+	int SemCompoundStatement(int node, int scope);
+	int SemCondition(int node, int scope, bool switch_context);
+	int SemSlotStatement(int node, int scope);
+	int SemForInit(int node, int scope);
+
+	// --- expressions ------------------------------------------------------
+	Resolved SemExpr(int node, int scope);
+	Resolved SemLiteral(int node, int scope);
+	Resolved SemKeywordLiteral(int node, int scope);
+	Resolved SemIdExpression(int node, int scope);
+	Resolved SemUnary(int node, int scope);
+	Resolved SemPostfix(int node, int scope);
+	Resolved SemBinary(int node, int scope);
+	Resolved SemAssignment(int node, int scope);
+	Resolved SemConditional(int node, int scope);
+	Resolved SemSubscript(int node, int scope);
+	Resolved SemCall(int node, int scope);
+	Resolved SemCast(int node, int scope);
+	Resolved SemSizeof(int node, int scope);
+	Resolved SemMember(int node, int scope);
+	Resolved SemBracedInit(int node, int scope);
+	Resolved SemParenthesized(int node, int scope);
+	Resolved SemFunctionalCast(int node, int scope, int target,
+	                           const std::vector<Resolved>& arguments);
+	int MemberClassOf(int entity) const;
+	int ClassScopeOf(int class_type) const;
+	int SemArgumentList(int node, int scope, std::vector<Resolved>& out);
+	Resolved SemIndirectCall(int node, int scope, const Resolved& callee,
+	                         const std::vector<Resolved>& arguments);
+	Resolved SemBuiltinCall(int node, int scope, const std::string& name);
+	Resolved SemNamedCall(int node, int scope, const std::string& text,
+	                      const std::vector<Candidate>& candidates,
+	                      const std::vector<Resolved>& arguments);
+
+	// --- conversions and overload resolution ------------------------------
+	Conversion Convert(const Resolved& from, int target, int scope);
+	int SourceType(const Resolved& from) const;
+	bool QualificationConvertible(int from, int to, bool& added) const;
+	bool PointerCompatible(int from, int to, bool& proper_subsequence) const;
+	int CompareConversions(const Conversion& a, const Conversion& b) const;
+	bool BetterSequence(const std::vector<Conversion>& a,
+	                    const std::vector<Conversion>& b) const;
+	void CollectCandidates(int scope, const std::string& text,
+	                       std::vector<Candidate>& out);
+	void CollectFrom(int scope, const std::string& name,
+	                 std::vector<Candidate>& out, std::vector<int>& visited,
+	                 bool& blocked) const;
+	std::string QualifiedEntityName(int entity) const;
+	std::string QualifiedScopeName(int scope) const;
+	std::string QualifiedEntitySpelling(int entity) const;
+	std::string BoundSpelling(int type, int scope) const;
+	bool IsScopedEnum(int type) const;
+
+	// --- values -----------------------------------------------------------
+	bool IsIntegralType(int type) const;
+	bool IsArithmeticType(int type) const;
+	bool IsScalarType(int type) const;
+	bool IsReferenceType(int type) const;
+	int ReferredType(int type) const;
+	int Promote(int type) const;
+	int UsualArithmetic(int left, int right) const;
+	int NullPointerTarget(int type) const;
+	int ClassOfPointer(int type) const;
+
+	// --- implicit class machinery -----------------------------------------
+	int ImplicitConstructor(int class_type, int scope);
+	int SemDefaultInitialization(const Resolved& object, int class_type, int scope);
+	void SemanticsImplicitBodies();
 
 	Model& model_;
 	const syntax::SyntaxArena& arena_;
@@ -202,6 +381,25 @@ private:
 	const std::vector<syntax::SyntaxLiteralFacts>& literals_;
 	std::vector<PendingBody> pending_;
 	long long anonymous_enums_;
+	long long local_classes_;
+	bool semantics_mode_;
+	SemTree sem_;
+	int sem_root_;
+	int return_type_;
+	bool return_is_void_;
+	int loop_depth_;
+	int switch_depth_;
+
+	// The object an anonymous union's storage has, keyed by the union's type,
+	// so a name the union injected reaches the member through it (9.5/3).
+	std::map<int, int> union_storage_;
+	int builtin_abort_;
+
+	// The classes an object definition default-initialised, in the order they
+	// first needed an implicit constructor, and the constructors already
+	// created.  Both are per translation unit, like the model.
+	std::vector<int> implicit_classes_;
+	std::map<int, int> implicit_ctors_;
 };
 
 }  // namespace semantic

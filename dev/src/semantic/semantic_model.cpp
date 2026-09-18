@@ -79,6 +79,9 @@ string StructuralKey(const Type& type)
 		key << (type.varargs ? "..." : "") << "):" << type.quals << ':'
 		    << type.func_ref;
 		break;
+	case kTypeMemberPointer:
+		key << type.base << ':' << type.member;
+		break;
 	default:
 		break;
 	}
@@ -249,6 +252,17 @@ int Model::Function(int result, const vector<int>& params, bool varargs, int qua
 	return InternType(StructuralKey(type), type);
 }
 
+// 8.3.3: a pointer to member is a distinct type from any pointer, so `int C::*`
+// and `int*` are never the same type however the class is laid out.
+int Model::MemberPointer(int class_type, int member_type)
+{
+	Type type;
+	type.kind = kTypeMemberPointer;
+	type.base = class_type;
+	type.member = member_type;
+	return InternType(StructuralKey(type), type);
+}
+
 int Model::NewClass(const string& name, int key)
 {
 	Type type;
@@ -303,6 +317,8 @@ string Model::Spelling(int id) const
 		return "rvalue-reference to " + Spelling(type.base);
 	case kTypeArray:
 		return "array of " + Number(type.bound < 0 ? 0 : type.bound) + " " + Spelling(type.base);
+	case kTypeMemberPointer:
+		return "member-pointer of " + Spelling(type.base) + " to " + Spelling(type.member);
 	case kTypeFunction:
 	{
 		string text = "function of (";
@@ -356,6 +372,32 @@ string Model::Spelling(int id) const
 bool Model::Same(int left, int right) const
 {
 	return left == right;
+}
+
+bool Model::DerivesFrom(int derived, int base) const
+{
+	if(derived == base)
+	{
+		return true;
+	}
+	const vector<int>* direct = BasesOf(derived);
+	if(direct == 0)
+	{
+		return false;
+	}
+	for(size_t index = 0; index < direct->size(); ++index)
+	{
+		int parent = (*direct)[index];
+		if(Get(parent).kind == kTypeCv)
+		{
+			parent = Get(parent).base;
+		}
+		if(DerivesFrom(parent, base))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 // 8.3.5/5: a parameter's array or function type adjusts to a pointer, and a
@@ -462,6 +504,7 @@ bool Model::SizeOf(int id, unsigned long long& size) const
 	case kTypeCv:
 		return SizeOf(type.base, size);
 	case kTypePointer:
+	case kTypeMemberPointer:
 		size = 8;
 		return true;
 	case kTypeLvalueReference:
@@ -592,6 +635,7 @@ bool Model::AlignOf(int id, unsigned long long& align) const
 	case kTypeCv:
 		return AlignOf(type.base, align);
 	case kTypePointer:
+	case kTypeMemberPointer:
 		align = 8;
 		return true;
 	case kTypeLvalueReference:

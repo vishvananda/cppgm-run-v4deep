@@ -29,6 +29,14 @@ Analyzer::Analyzer(Model& model, const syntax::SyntaxArena& arena,
 	, spellings_(spellings)
 	, literals_(literals)
 	, anonymous_enums_(0)
+	, local_classes_(0)
+	, semantics_mode_(false)
+	, sem_root_(-1)
+	, return_type_(-1)
+	, return_is_void_(false)
+	, loop_depth_(0)
+	, switch_depth_(0)
+	, builtin_abort_(-1)
 {}
 
 // ---------------------------------------------------------------------------
@@ -367,7 +375,9 @@ void Analyzer::AnalyzeAliasDeclaration(int node, int scope)
 	model_.AddBinding(scope, binding);
 	const int entity = model_.NewEntity(kEntityAlias, name);
 	model_.EntityOf(entity).type = type;
+	model_.EntityOf(entity).decl_scope = scope;
 	model_.BindType(scope, name, entity);
+	model_.NoteDeclaration(type_node, type, entity, scope);
 }
 
 void Analyzer::AnalyzeStaticAssert(int node, int scope)

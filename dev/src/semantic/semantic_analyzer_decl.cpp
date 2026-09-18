@@ -207,6 +207,17 @@ string Analyzer::AnonymousEnumName()
 	return out.str();
 }
 
+// PA7's synthetic name for an unnamed class type that a declarator uses.  The
+// class is not the object the declarator declares, so it takes a name of its
+// own rather than the declarator's.
+string Analyzer::LocalClassName()
+{
+	++local_classes_;
+	ostringstream out;
+	out << "__local_type" << local_classes_;
+	return out.str();
+}
+
 // ---------------------------------------------------------------------------
 // Decl-specifier sequences
 // ---------------------------------------------------------------------------
@@ -491,6 +502,7 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 	// that result (8.3/1).  The suffixes run innermost-last, so `int a[2][3]`
 	// is an array of two arrays of three.
 	vector<int> operators;
+	vector<int> operator_classes;
 	vector<int> operator_quals;
 	vector<int> suffixes;
 	vector<int> suffix_quals;
@@ -518,6 +530,10 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 				kind = kTypeRvalueReference;
 			}
 			operators.push_back(kind);
+			// 8.3.3: `C::*` is a pointer to a member of `C`, so the class the
+			// qualifier names is part of the operator rather than of the base.
+			operator_classes.push_back(kind == kTypePointer
+			                              ? MemberPointerClass(spelling, scope) : -1);
 			operator_quals.push_back(0);
 			last_is_suffix = false;
 			continue;
@@ -568,7 +584,9 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 			{
 				throw SemanticError("cannot form a pointer to a reference");
 			}
-			type = model_.Pointer(type);
+			type = operator_classes[index] >= 0
+			    ? model_.MemberPointer(operator_classes[index], type)
+			    : model_.Pointer(type);
 		}
 		else if(operators[index] == kTypeLvalueReference)
 		{
@@ -590,6 +608,23 @@ int Analyzer::BuildDeclarator(int node, int base, int scope)
 		return BuildDeclarator(ChildAt(nested, 0), type, scope);
 	}
 	return type;
+}
+
+// 8.3.3: the class a `C::*` pointer operator names, or -1 when the operator is
+// an ordinary pointer.  The spelling is the source text of the operator, so a
+// qualified name ends in `::*` and a plain pointer is `*`.
+int Analyzer::MemberPointerClass(const std::string& spelling, int scope)
+{
+	if(spelling.size() < 4 || spelling[spelling.size() - 1] != '*')
+	{
+		return -1;
+	}
+	const string qualifier = spelling.substr(0, spelling.size() - 1);
+	if(qualifier.size() < 3 || qualifier.compare(qualifier.size() - 2, 2, "::") != 0)
+	{
+		return -1;
+	}
+	return ResolveTypeName(scope, qualifier.substr(0, qualifier.size() - 2), false, false);
 }
 
 int Analyzer::BuildSuffix(int node, int base, int scope, int quals, int func_ref)
@@ -654,6 +689,7 @@ int Analyzer::BuildParameterClause(int node, int scope, vector<int>& params, boo
 		const int type = declarator < 0 ? spec.type : BuildDeclarator(declarator, spec.type, scope);
 		string name;
 		CollectDeclaratorName(declarator, name);
+		model_.NoteDeclaration(child, type, -1, scope);
 		params.push_back(type);
 		if(names != 0)
 		{

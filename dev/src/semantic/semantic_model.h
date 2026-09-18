@@ -50,7 +50,8 @@ enum ETypeKind
 	kTypeLvalueReference,
 	kTypeRvalueReference,
 	kTypeArray,
-	kTypeFunction
+	kTypeFunction,
+	kTypeMemberPointer
 };
 
 // 9 [class]: the three class keys, which the dump prints with a class type.
@@ -111,6 +112,9 @@ struct Type
 	// members of an alias for one.
 	int decl_scope;
 
+	// A pointer to member's member type (8.3.3).  `base` names the class.
+	int member;
+
 	Type()
 		: kind(kTypeFundamental)
 		, base(-1)
@@ -123,6 +127,7 @@ struct Type
 		, complete(false)
 		, underlying(-1)
 		, decl_scope(-1)
+		, member(-1)
 	{}
 };
 
@@ -218,6 +223,10 @@ struct Entity
 	// deferred body a class member function waits for.
 	int body;
 
+	// The scope the entity was first declared in, which is what its qualified
+	// name is built from.
+	int decl_scope;
+
 	Entity()
 		: kind(kEntityObject)
 		, type(-1)
@@ -226,6 +235,7 @@ struct Entity
 		, value(0)
 		, value_is_signed(true)
 		, body(-1)
+		, decl_scope(-1)
 	{}
 };
 
@@ -312,6 +322,7 @@ public:
 	int NewClass(const std::string& name, int key);
 	int NewEnum(const std::string& name, int key);
 	int NewTemplateParameter(const std::string& name, bool template_parameter);
+	int MemberPointer(int class_type, int member_type);
 
 	const Type& Get(int id) const
 	{
@@ -433,6 +444,86 @@ public:
 	int EnclosingNamespace(int scope) const;
 	bool NamespaceEncloses(int outer, int inner) const;
 
+	// What one declaration bound at its declarator node: the type it gave the
+	// name, the entity it denotes and the scope it landed in.  A later pass
+	// reads this rather than re-analysing the declarator, which would declare
+	// the same names twice.
+	struct DeclarationFact
+	{
+		int type;
+		int entity;
+		int scope;
+
+		DeclarationFact()
+			: type(-1)
+			, entity(-1)
+			, scope(-1)
+		{}
+	};
+
+	void NoteDeclaration(int node, int type, int entity, int scope)
+	{
+		if(node < 0)
+		{
+			return;
+		}
+		DeclarationFact fact;
+		fact.type = type;
+		fact.entity = entity;
+		fact.scope = scope;
+		declarations_[node] = fact;
+	}
+
+	const DeclarationFact* DeclarationAt(int node) const
+	{
+		std::map<int, DeclarationFact>::const_iterator found = declarations_.find(node);
+		return found == declarations_.end() ? 0 : &found->second;
+	}
+
+	// The scope in effect at a syntax node, recorded by the analysis that opened
+	// it.  A later pass reads it rather than re-deriving the scope structure.
+	void NoteScope(int node, int scope)
+	{
+		node_scopes_[node] = scope;
+	}
+
+	int ScopeAt(int node) const
+	{
+		std::map<int, int>::const_iterator found = node_scopes_.find(node);
+		return found == node_scopes_.end() ? -1 : found->second;
+	}
+
+	// The scope a class, enumeration or namespace entity owns, or -1.
+	int EntityScope(int entity) const
+	{
+		return entity < 0 ? -1 : entities_[static_cast<std::size_t>(entity)].scope;
+	}
+
+	// The scope an entity's declaration landed in, which is what its qualified
+	// name is built from.  For a class, enumeration or namespace this is the
+	// scope the entity owns.
+	int DeclaringScope(int entity) const
+	{
+		return entity < 0 ? -1 : entities_[static_cast<std::size_t>(entity)].decl_scope;
+	}
+
+	// 10 [class.derived]: the direct base classes of a class type, in the order
+	// the base-clause wrote them.  A derived-to-base conversion and a qualified
+	// member access both need them.
+	void AddBase(int class_type, int base_type)
+	{
+		bases_[class_type].push_back(base_type);
+	}
+
+	const std::vector<int>* BasesOf(int class_type) const
+	{
+		std::map<int, std::vector<int> >::const_iterator found = bases_.find(class_type);
+		return found == bases_.end() ? 0 : &found->second;
+	}
+
+	// Whether `derived` is `base` or has it as a base, directly or indirectly.
+	bool DerivesFrom(int derived, int base) const;
+
 private:
 	int InternType(const std::string& key, const Type& type);
 	int AddType(const Type& type);
@@ -445,6 +536,9 @@ private:
 	std::map<std::string, int> type_ids_;
 	std::vector<Scope> scopes_;
 	std::vector<Entity> entities_;
+	std::map<int, int> node_scopes_;
+	std::map<int, DeclarationFact> declarations_;
+	std::map<int, std::vector<int> > bases_;
 	int global_;
 };
 
