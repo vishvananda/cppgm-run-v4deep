@@ -984,6 +984,45 @@ int Parser::PrimaryExpression()
 		Add(node, ParenArgumentList());
 		return node;
 	}
+	// The same cast written with a multi-word type name, as `unsigned long(e)`
+	// is: the words run up to the parenthesis that opens the argument list.
+	if(IsSimpleTypeSpecifierKind(kind))
+	{
+		size_t words = 0;
+		while(IsSimpleTypeSpecifierKind(KindAt(words)))
+		{
+			++words;
+		}
+		if(words > 1 && At(posttoken::OP_LPAREN, words))
+		{
+			const size_t start = Position();
+			const int node = Tag("call-expression");
+			for(size_t index = 0; index < words; ++index)
+			{
+				Advance();
+			}
+			Add(node, Named("id-expression", RangeText(start)));
+			Add(node, ParenArgumentList());
+			return node;
+		}
+	}
+	// A `decltype` applied to a parenthesized argument list is the same cast
+	// with a decltype type name.
+	if(kind == posttoken::KW_DECLTYPE && At(posttoken::OP_LPAREN, 1))
+	{
+		// Only where an argument list follows the decltype's own parentheses;
+		// `decltype(f<T>())::value` names a member of that type instead.
+		const Mark mark = Take();
+		const int node = Tag("call-expression");
+		const int type = DecltypeSpecifier();
+		if(At(posttoken::OP_LPAREN))
+		{
+			Add(node, type);
+			Add(node, ParenArgumentList());
+			return node;
+		}
+		Rollback(mark);
+	}
 	if(kind == posttoken::OP_LPAREN)
 	{
 		const Mark mark = Take();

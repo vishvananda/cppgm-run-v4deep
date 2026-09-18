@@ -95,6 +95,12 @@ int Analyzer::FindOrCreateObject(int scope, const string& name, int type)
 		}
 		return found;
 	}
+	if(found >= 0)
+	{
+		// 3.4/1: one name denotes one entity, so an object and a function
+		// cannot share an ordinary name.
+		throw SemanticError("`" + name + "` is already declared in this scope");
+	}
 	const int entity = model_.NewEntity(kEntityObject, name);
 	model_.EntityOf(entity).type = type;
 	model_.EntityOf(entity).decl_scope = scope;
@@ -122,6 +128,10 @@ int Analyzer::FindOrCreateFunction(int scope, const string& name, int type)
 			throw SemanticError("conflicting function return type for `" + name + "`");
 		}
 		return found;
+	}
+	if(found >= 0)
+	{
+		throw SemanticError("`" + name + "` is already declared in this scope");
 	}
 	const int entity = model_.NewEntity(kEntityFunction, name);
 	model_.EntityOf(entity).type = type;
@@ -182,6 +192,12 @@ int Analyzer::ResolveTypeName(int scope, const string& text, bool elaborated_cla
 	}
 	if(entity < 0)
 	{
+		// The PA7 slice reaches `nullptr_t` as the type of `nullptr` without a
+		// declaration of it.
+		if(semantics_mode_ && text == "nullptr_t")
+		{
+			return model_.Fundamental(posttoken::FT_NULLPTR_T);
+		}
 		throw SemanticError("unknown type name `" + text + "`");
 	}
 	return model_.EntityOf(entity).type;

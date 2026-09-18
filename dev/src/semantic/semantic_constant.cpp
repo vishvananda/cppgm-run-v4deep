@@ -236,6 +236,46 @@ int Analyzer::EvaluateDecltype(int node, int scope)
 		parenthesized = true;
 		target = ChildAt(operand, 0);
 	}
+	// 7.1.6.2/4: the type of an expression the subset can type without
+	// evaluating it - a literal, a `sizeof`, a `nullptr` or a call of a
+	// function already declared - is the type that expression has.
+	if(Tag(target) == "keyword-literal")
+	{
+		const string word = AfterColon(Label(target));
+		if(word == "nullptr")
+		{
+			return model_.Fundamental(posttoken::FT_NULLPTR_T);
+		}
+		if(word == "true" || word == "false")
+		{
+			return model_.Fundamental(posttoken::FT_BOOL);
+		}
+	}
+	if(Tag(target) == "sizeof-expression" || Tag(target) == "type-trait-expression")
+	{
+		return model_.Fundamental(posttoken::FT_UNSIGNED_LONG_INT);
+	}
+	if(Tag(target) == "literal")
+	{
+		const Constant value = EvaluateLiteral(target);
+		if(value.valid)
+		{
+			return model_.Fundamental(value.is_signed ? posttoken::FT_INT
+			                                          : posttoken::FT_UNSIGNED_INT);
+		}
+	}
+	if(Tag(target) == "call-expression")
+	{
+		const int callee = ChildAt(target, 0);
+		if(Tag(callee) == "id-expression")
+		{
+			const int entity = ResolveValueName(scope, Label(callee));
+			if(entity >= 0 && model_.EntityOf(entity).kind == kEntityFunction)
+			{
+				return model_.Get(model_.EntityOf(entity).type).base;
+			}
+		}
+	}
 	if(Tag(target) != "id-expression")
 	{
 		throw SemanticError("decltype operand is outside the supported subset");

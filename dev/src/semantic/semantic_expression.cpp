@@ -520,20 +520,37 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 			return result;
 		}
 		bool added = false;
-		if(!QualificationConvertible(source, parameter.base, added))
+		if(QualificationConvertible(source, parameter.base, added))
+		{
+			result.rank = 4;
+			result.qualification = added;
+			result.bound_to_lvalue = argument_lvalue;
+			result.lvalue_to_rvalue = false;
+			return result;
+		}
+		// 13.3.3.1.4: an argument that is not reference-compatible is first
+		// converted to the referred type, and the reference binds the result.
+		// The result is a prvalue, so only a reference that may bind one is
+		// viable.
+		const int referred = model_.Get(parameter.base).kind == kTypeCv
+		    ? model_.Get(parameter.base).base : parameter.base;
+		const bool bindable = result.rvalue_reference ||
+		    (model_.Get(parameter.base).kind == kTypeCv);
+		if(!bindable)
 		{
 			return result;
 		}
-		if(!argument_lvalue && !result.rvalue_reference &&
-		   (model_.Get(parameter.base).kind != kTypeCv))
+		Conversion inner = Convert(from, referred, scope);
+		if(inner.rank == 0)
 		{
-			// 8.5.3/5: a non-const lvalue reference does not bind a temporary.
 			return result;
 		}
-		result.rank = 4;
-		result.qualification = added;
-		result.bound_to_lvalue = argument_lvalue;
-		result.lvalue_to_rvalue = false;
+		result.rank = inner.rank;
+		result.qualification = inner.qualification;
+		result.pointer_conversion = inner.pointer_conversion;
+		result.proper_subsequence = inner.proper_subsequence;
+		result.bound_to_lvalue = false;
+		result.lvalue_to_rvalue = true;
 		return result;
 	}
 
@@ -1121,6 +1138,32 @@ Analyzer::Resolved Analyzer::SemIdExpression(int node, int scope)
 		{
 			vector<string> words;
 			words.push_back(word);
+			result.type_name = true;
+			result.type = model_.Fundamental(FundamentalFromSpecifiers(words));
+			return result;
+		}
+		// A type name written as several keywords, as `unsigned long(e)` is.
+		vector<string> words;
+		size_t position = 0;
+		while(position < text.size())
+		{
+			const size_t space = text.find(' ', position);
+			const string part = text.substr(position, space == string::npos
+			                                ? string::npos : space - position);
+			if(!IsSimpleTypeWord(part))
+			{
+				words.clear();
+				break;
+			}
+			words.push_back(part);
+			if(space == string::npos)
+			{
+				break;
+			}
+			position = space + 1;
+		}
+		if(!words.empty())
+		{
 			result.type_name = true;
 			result.type = model_.Fundamental(FundamentalFromSpecifiers(words));
 			return result;
@@ -1949,6 +1992,10 @@ Analyzer::Resolved Analyzer::SemCall(int node, int scope)
 		}
 		return SemIndirectCall(node, scope, callee, arguments);
 	}
+	if(Tag(callee_node) == "decltype-specifier")
+	{
+		return SemFunctionalCast(node, scope, EvaluateDecltype(callee_node, scope), arguments);
+	}
 	const Resolved callee = SemExpr(callee_node, scope);
 	return SemIndirectCall(node, scope, callee, arguments);
 }
@@ -1987,7 +2034,10 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 			Conversion conversion;
 			if(argument < fixed)
 			{
-				conversion = Convert(arguments[argument], function.params[argument], scope);
+				// 8.3.5/5: the parameter the argument matches is the adjusted
+				// one, so `void f(int[3])` takes a pointer.
+				conversion = Convert(arguments[argument],
+				                     model_.AdjustParameter(function.params[argument]), scope);
 				if(conversion.rank == 0)
 				{
 					ok = false;
@@ -2105,7 +2155,8 @@ Analyzer::Resolved Analyzer::SemIndirectCall(int node, int scope, const Resolved
 		{
 			continue;
 		}
-		const Conversion conversion = Convert(arguments[index], record.params[index], scope);
+		const Conversion conversion =
+		    Convert(arguments[index], model_.AdjustParameter(record.params[index]), scope);
 		if(conversion.rank == 0)
 		{
 			throw SemanticError("an argument does not convert to the parameter type");
