@@ -513,17 +513,16 @@ Analyzer::Conversion Analyzer::Convert(const Resolved& from, int target, int sco
 		result.rvalue_reference = parameter.kind == kTypeRvalueReference;
 		const bool argument_lvalue = from.category == kLvalue;
 		const int source = SourceType(from);
-		// 8.5.3/5: an rvalue reference binds only to an rvalue, except that a
-		// cv-qualified one still cannot bind an lvalue.
-		if(result.rvalue_reference && argument_lvalue)
-		{
-			return result;
-		}
 		bool added = false;
 		if(QualificationConvertible(source, parameter.base, added))
 		{
 			// 8.5.3/5: an lvalue reference to a non-cv type binds only an
-			// lvalue, so `int&` cannot take a prvalue.
+			// lvalue, so `int&` cannot take a prvalue, and an rvalue reference
+			// never binds an lvalue.
+			if(result.rvalue_reference && argument_lvalue)
+			{
+				return result;
+			}
 			if(!argument_lvalue && !result.rvalue_reference &&
 			   model_.Get(parameter.base).kind != kTypeCv)
 			{
@@ -1395,6 +1394,14 @@ Analyzer::Resolved Analyzer::SemBinary(int node, int scope)
 	{
 		right_type = model_.Pointer(model_.Get(right_type).base);
 	}
+	if(model_.Get(left_type).kind == kTypeCv)
+	{
+		left_type = model_.Get(left_type).base;
+	}
+	if(model_.Get(right_type).kind == kTypeCv)
+	{
+		right_type = model_.Get(right_type).base;
+	}
 	const ETypeKind left_kind = left_type < 0 ? kTypeFundamental : model_.Get(left_type).kind;
 	const ETypeKind right_kind = right_type < 0 ? kTypeFundamental : model_.Get(right_type).kind;
 	const bool left_pointer = left_kind == kTypePointer || left_kind == kTypeMemberPointer;
@@ -2144,7 +2151,7 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 			// 13.3.3.1.4: the argument the reference binds is the converted
 			// temporary, which the dump shows as the conversion that made it.
 			const int converted = sem_.Add("cast-expression", kPrvalue,
-			                               Spell(conversion.target));
+			                               Spell(ReferredType(conversion.target)));
 			sem_.AddChild(converted, argument);
 			argument = converted;
 		}
@@ -2152,10 +2159,13 @@ Analyzer::Resolved Analyzer::SemNamedCall(int node, int scope, const string& tex
 		{
 			// 4.10/1: an integer literal zero that becomes a pointer prints as
 			// the pointer it converted to.
-			const int target = conversion.target;
-			if(target >= 0 && NullPointerTarget(ReferredType(target)) >= 0)
+			const int target = ReferredType(conversion.target);
+			const bool pointer_target = NullPointerTarget(target) >= 0 ||
+			    (model_.Get(target).kind == kTypeFundamental &&
+			     model_.Get(target).base == posttoken::FT_NULLPTR_T);
+			if(target >= 0 && pointer_target)
 			{
-				sem_.SetType(argument, Spell(ReferredType(target)));
+				sem_.SetType(argument, Spell(target));
 			}
 		}
 		sem_.AddChild(result.node, argument);
