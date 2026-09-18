@@ -321,25 +321,27 @@ private:
 	int SemForInit(int node, int scope);
 
 	// --- expressions ------------------------------------------------------
-	Resolved SemExpr(int node, int scope);
+	Resolved SemExpr(int node, int scope, int target = -1);
 	Resolved SemLiteral(int node, int scope);
 	Resolved SemKeywordLiteral(int node, int scope);
 	Resolved SemIdExpression(int node, int scope);
-	Resolved SemUnary(int node, int scope);
+	Resolved SemUnary(int node, int scope, int target);
 	Resolved SemPostfix(int node, int scope);
 	Resolved SemBinary(int node, int scope);
 	Resolved SemAssignment(int node, int scope);
 	Resolved SemConditional(int node, int scope);
 	Resolved SemSubscript(int node, int scope);
 	Resolved SemCall(int node, int scope);
-	Resolved SemCast(int node, int scope);
+	Resolved SemCast(int node, int scope, int target);
 	Resolved SemSizeof(int node, int scope);
 	Resolved SemMember(int node, int scope);
 	Resolved SemBracedInit(int node, int scope);
-	Resolved SemParenthesized(int node, int scope);
+	Resolved SemParenthesized(int node, int scope, int target);
 	Resolved SemFunctionalCast(int node, int scope, int target,
 	                           const std::vector<Resolved>& arguments);
 	int MemberClassOf(int entity) const;
+	Resolved SemMemberFunctionAddress(int node, int scope, int target);
+	bool HasTemplateParameter(int type) const;
 	int ClassScopeOf(int class_type) const;
 	int FindMemberInBases(int class_type, const std::string& name) const;
 	int SemArgumentList(int node, int scope, std::vector<Resolved>& out);

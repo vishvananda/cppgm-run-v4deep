@@ -360,6 +360,10 @@ public:
 	// `void f(int)` and `void f(int[3])` one function.
 	int AdjustParameter(int id) const;
 
+	// The adjusted form of a whole function type, which is what a signature
+	// comparison and a target-directed member lookup compare.
+	int AdjustFunction(int id) const;
+
 	// The size and alignment of a type in the course ABI, for `sizeof` and
 	// `alignof`.  An incomplete class or an unknown array bound has no size.
 	bool SizeOf(int id, unsigned long long& size) const;

@@ -402,6 +402,21 @@ bool Model::DerivesFrom(int derived, int base) const
 
 // 8.3.5/5: a parameter's array or function type adjusts to a pointer, and a
 // top-level cv qualifier is removed, before two declarations are compared.
+int Model::AdjustFunction(int id) const
+{
+	const Type type = Get(id);
+	if(type.kind != kTypeFunction)
+	{
+		return id;
+	}
+	vector<int> params;
+	for(size_t index = 0; index < type.params.size(); ++index)
+	{
+		params.push_back(AdjustParameter(type.params[index]));
+	}
+	return Function(type.base, params, type.varargs, type.quals, type.func_ref);
+}
+
 int Model::AdjustParameter(int id) const
 {
 	const Type& type = Get(id);

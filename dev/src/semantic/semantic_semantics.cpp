@@ -383,7 +383,7 @@ int Analyzer::SemInitializer(int node, int scope, int& type, const string& name,
 		const vector<int> arguments = ChildrenOf(child);
 		if(arguments.size() == 1)
 		{
-			return SemExpr(arguments[0], scope).node;
+			return SemExpr(arguments[0], scope, ReferredType(type)).node;
 		}
 		if(arguments.empty() && model_.Get(plain).kind == kTypeClass)
 		{
@@ -399,7 +399,7 @@ int Analyzer::SemInitializer(int node, int scope, int& type, const string& name,
 	{
 		return -1;
 	}
-	Resolved value = SemExpr(child, scope);
+	Resolved value = SemExpr(child, scope, ReferredType(type));
 	int plain_target = ReferredType(type);
 	if(model_.Get(plain_target).kind == kTypeCv)
 	{
@@ -498,6 +498,12 @@ void Analyzer::SemanticsImplicitBodies()
 	// unit's own declarations, which is where the reference puts it.
 	for(size_t index = 0; index < deferred_bodies_.size(); ++index)
 	{
+		const Model::DeclarationFact* fact =
+		    model_.DeclarationAt(deferred_bodies_[index].first);
+		if(fact == 0 || HasTemplateParameter(fact->type))
+		{
+			continue;
+		}
 		const int definition = SemFunctionDefinition(0, 0, deferred_bodies_[index].first,
 		                                             deferred_bodies_[index].second);
 		if(definition >= 0)

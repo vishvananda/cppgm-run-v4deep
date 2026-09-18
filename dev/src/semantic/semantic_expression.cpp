@@ -1337,13 +1337,13 @@ int Analyzer::MemberClassOf(int entity) const
 	return owner < 0 ? -1 : model_.EntityOf(owner).type;
 }
 
-Analyzer::Resolved Analyzer::SemParenthesized(int node, int scope)
+Analyzer::Resolved Analyzer::SemParenthesized(int node, int scope, int target)
 {
-	return SemExpr(ChildAt(node, 0), scope);
+	return SemExpr(ChildAt(node, 0), scope, target);
 }
 
 // 5.3 [expr.unary.op] and the two increment forms.
-Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
+Analyzer::Resolved Analyzer::SemUnary(int node, int scope, int target)
 {
 	Resolved result;
 	const string op = OperatorWord(Label(node));
@@ -1362,7 +1362,18 @@ Analyzer::Resolved Analyzer::SemUnary(int node, int scope)
 		sem_.AddChild(result.node, operand.node);
 		return result;
 	}
-	const Resolved operand = SemExpr(operand_node, scope);
+	Resolved operand;
+	if(op == "&" && target >= 0 && model_.Get(target).kind == kTypeMemberPointer &&
+	   IsTag(operand_node, "id-expression"))
+	{
+		// 5.3.1/3 with 13.4: the target type says which member the address
+		// denotes, which is what tells two cv-qualified overloads apart.
+		operand = SemMemberFunctionAddress(operand_node, scope, target);
+	}
+	else
+	{
+		operand = SemExpr(operand_node, scope);
+	}
 	if(op == "&")
 	{
 		if(operand.category != kLvalue)
@@ -2003,6 +2014,82 @@ int Analyzer::FindMemberInBases(int class_type, const string& name) const
 	return -1;
 }
 
+// The address of a member function whose overload set the target type decides:
+// the member the target's member type names is the one the address denotes.
+Analyzer::Resolved Analyzer::SemMemberFunctionAddress(int node, int scope, int target)
+{
+	vector<Candidate> candidates;
+	CollectCandidates(scope, Label(node), candidates);
+	const int member = model_.Get(target).member;
+	int chosen = -1;
+	for(size_t index = 0; index < candidates.size(); ++index)
+	{
+		const Type function = model_.Get(candidates[index].type);
+		if(function.kind != kTypeFunction || HasTemplateParameter(candidates[index].type))
+		{
+			continue;
+		}
+		if(model_.Same(model_.AdjustFunction(candidates[index].type), member))
+		{
+			chosen = static_cast<int>(index);
+			break;
+		}
+	}
+	if(chosen < 0)
+	{
+		throw SemanticError("no member function matches the target type");
+	}
+	Resolved result;
+	result.entity = candidates[static_cast<size_t>(chosen)].entity;
+	result.function = result.entity;
+	result.type = candidates[static_cast<size_t>(chosen)].type;
+	result.category = kLvalue;
+	const int class_scope = ClassScopeOf(model_.Get(target).base);
+	result.node = sem_.Add("id-expression", result.category,
+	                       BoundSpelling(result.type, class_scope), Label(node));
+	return result;
+}
+
+// Whether a type mentions a template parameter, which marks a member whose
+// shape PA7 does not instantiate.
+bool Analyzer::HasTemplateParameter(int type) const
+{
+	if(type < 0)
+	{
+		return false;
+	}
+	const Type& record = model_.Get(type);
+	if(record.kind == kTypeTemplateParameter)
+	{
+		return true;
+	}
+	if(record.kind == kTypeCv || record.kind == kTypePointer ||
+	   record.kind == kTypeLvalueReference || record.kind == kTypeRvalueReference ||
+	   record.kind == kTypeArray)
+	{
+		return HasTemplateParameter(record.base);
+	}
+	if(record.kind == kTypeMemberPointer)
+	{
+		return HasTemplateParameter(record.base) || HasTemplateParameter(record.member);
+	}
+	if(record.kind == kTypeFunction)
+	{
+		if(HasTemplateParameter(record.base))
+		{
+			return true;
+		}
+		for(size_t index = 0; index < record.params.size(); ++index)
+		{
+			if(HasTemplateParameter(record.params[index]))
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 // The class scope a class type owns, or -1.
 int Analyzer::ClassScopeOf(int class_type) const
 {
@@ -2064,7 +2151,7 @@ int Analyzer::SemArgumentList(int node, int scope, vector<Resolved>& out)
 	return list;
 }
 
-Analyzer::Resolved Analyzer::SemExpr(int node, int scope)
+Analyzer::Resolved Analyzer::SemExpr(int node, int scope, int target)
 {
 	if(node < 0)
 	{
@@ -2085,11 +2172,11 @@ Analyzer::Resolved Analyzer::SemExpr(int node, int scope)
 	}
 	if(tag == "parenthesized-expression")
 	{
-		return SemParenthesized(node, scope);
+		return SemParenthesized(node, scope, target);
 	}
 	if(tag == "unary-expression")
 	{
-		return SemUnary(node, scope);
+		return SemUnary(node, scope, target);
 	}
 	if(tag == "postfix-expression")
 	{
@@ -2117,7 +2204,7 @@ Analyzer::Resolved Analyzer::SemExpr(int node, int scope)
 	}
 	if(tag == "cast-expression")
 	{
-		return SemCast(node, scope);
+		return SemCast(node, scope, target);
 	}
 	if(tag == "sizeof-expression")
 	{
@@ -2459,20 +2546,20 @@ Analyzer::Resolved Analyzer::SemFunctionalCast(int node, int scope, int target,
 // 5.4 and 5.2.9: the explicit casts the handout's slice reaches.  A cast to a
 // reference type yields the operand itself re-typed, which is how the dump
 // shows an xvalue cast.
-Analyzer::Resolved Analyzer::SemCast(int node, int scope)
+Analyzer::Resolved Analyzer::SemCast(int node, int scope, int target)
 {
 	const string label = Label(node);
 	const int type_node = ChildAt(node, 0);
 	const int operand_node = ChildAt(node, 1);
-	const int target = BuildDeclarator(type_node, -1, scope);
-	const Resolved operand = SemExpr(operand_node, scope);
+	const int cast_type = BuildDeclarator(type_node, -1, scope);
+	const Resolved operand = SemExpr(operand_node, scope, cast_type);
 	Resolved result;
-	result.type = target;
-	if(model_.Get(target).kind == kTypeLvalueReference)
+	result.type = cast_type;
+	if(model_.Get(cast_type).kind == kTypeLvalueReference)
 	{
 		result.category = kLvalue;
 	}
-	else if(model_.Get(target).kind == kTypeRvalueReference)
+	else if(model_.Get(cast_type).kind == kTypeRvalueReference)
 	{
 		result.category = kXvalue;
 	}
@@ -2482,6 +2569,11 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 	}
 	const string word = AfterColon(label);
 	const bool static_form = word == "static_cast";
+	if(static_form && model_.Same(operand.type, cast_type))
+	{
+		// A static_cast to the operand's own type is the operand itself.
+		return operand;
+	}
 	if(static_form)
 	{
 		int source = ReferredType(operand.type);
@@ -2489,29 +2581,29 @@ Analyzer::Resolved Analyzer::SemCast(int node, int scope)
 		{
 			source = model_.Get(source).base;
 		}
-		const bool same = model_.Same(source, ReferredType(target));
-		const bool integral_pair = IsIntegralType(source) && IsIntegralType(target);
-		const bool arithmetic_pair = IsArithmeticType(source) && IsArithmeticType(target);
+		const bool same = model_.Same(source, ReferredType(cast_type));
+		const bool integral_pair = IsIntegralType(source) && IsIntegralType(cast_type);
+		const bool arithmetic_pair = IsArithmeticType(source) && IsArithmeticType(cast_type);
 		const bool pointer_pair = model_.Get(source).kind == kTypePointer &&
-		                          (model_.Get(ReferredType(target)).kind == kTypePointer ||
-		                           model_.Get(ReferredType(target)).kind == kTypeMemberPointer);
+		                          (model_.Get(ReferredType(cast_type)).kind == kTypePointer ||
+		                           model_.Get(ReferredType(cast_type)).kind == kTypeMemberPointer);
 		const bool null_source = operand.null_zero ||
 		    (model_.Get(source).kind == kTypeFundamental &&
 		     model_.Get(source).base == posttoken::FT_NULLPTR_T);
 		const bool null_to_pointer = null_source &&
-		    NullPointerTarget(ReferredType(target)) >= 0;
-		const bool to_bool = model_.Get(ReferredType(target)).kind == kTypeFundamental &&
-		                     model_.Get(ReferredType(target)).base == posttoken::FT_BOOL &&
+		    NullPointerTarget(ReferredType(cast_type)) >= 0;
+		const bool to_bool = model_.Get(ReferredType(cast_type)).kind == kTypeFundamental &&
+		                     model_.Get(ReferredType(cast_type)).base == posttoken::FT_BOOL &&
 		                     IsScalarType(source);
-		const bool void_cast = model_.Get(ReferredType(target)).kind == kTypeFundamental &&
-		                       model_.Get(ReferredType(target)).base == posttoken::FT_VOID;
+		const bool void_cast = model_.Get(ReferredType(cast_type)).kind == kTypeFundamental &&
+		                       model_.Get(ReferredType(cast_type)).base == posttoken::FT_VOID;
 		if(!same && !integral_pair && !arithmetic_pair && !pointer_pair &&
 		   !null_to_pointer && !to_bool && !void_cast)
 		{
 			throw SemanticError("`static_cast` cannot perform this conversion");
 		}
 	}
-	if(IsReferenceType(target))
+	if(IsReferenceType(cast_type))
 	{
 		// 5.2.9/4: a cast to a reference type denotes the operand itself with
 		// the reference's type, which is how the dump shows an xvalue cast.
