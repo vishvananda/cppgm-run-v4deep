@@ -413,6 +413,9 @@ private:
 	// The entity a chosen candidate denotes, instantiating it if the ranking
 	// has just picked a template's specialization.
 	int CandidateEntity(Candidate& candidate);
+	// 5.3.3/1: an unevaluated operand does not demand the specializations it
+	// names, so the dump must not record them.
+	void UndoInstantiations(std::size_t mark);
 	void SemInstantiations(std::vector<int>& out);
 
 	// --- conversions and overload resolution ------------------------------

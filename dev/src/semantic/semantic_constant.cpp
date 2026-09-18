@@ -203,6 +203,20 @@ Constant Analyzer::EvaluateIdentifier(int node, int scope)
 	const int entity = ResolveValueName(scope, text);
 	if(entity < 0)
 	{
+		// 14.2: a template-id is a name, and the specialization it names is a
+		// function rather than a value, so it is not an integral constant
+		// expression - but it is not an unknown name either.
+		string template_name;
+		vector<string> template_arguments;
+		if(text.find('<') != string::npos &&
+		   SplitTemplateId(text, template_name, template_arguments))
+		{
+			vector<int> found;
+			if(FindFunctionTemplates(scope, template_name, found))
+			{
+				return result;
+			}
+		}
 		throw SemanticError("unknown name `" + text + "`");
 	}
 	const Entity& record = model_.EntityOf(entity);

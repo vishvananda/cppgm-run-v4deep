@@ -169,6 +169,20 @@ harness, and each is a reading the standard and the reference agree on:
   accepted.  The reference fails on this input with an internal consistency
   error and `g++ -std=c++11` rejects it, so the call layer now rejects it at
   the argument list, where the rule lives, rather than at one call form.
+- **A template-id is a name the constant layer must not call unknown.**
+  `void (*p)(int) = &hello<int>;` was rejected with `unknown name`, because the
+  PA6 analysis evaluates every initializer and `EvaluateIdentifier` threw when
+  ordinary lookup found nothing.  14.2 makes the template-id a name for a
+  function, which is not an integral constant expression but is not an unknown
+  name either, so the layer now reads it as one and reports "not a constant".
+- **An unevaluated operand demands no instantiation** (5.3.3/1).
+  `sizeof(&hello<int>)` printed the instantiation in this compiler and prints
+  none in the reference, because `sizeof`'s operand is unevaluated and 14.7.1
+  instantiates a specialization only where a definition is required.  The
+  substitution a `sizeof` operand made is now forgotten as well as the record,
+  so a later evaluated demand is the one that instantiates it - which is what
+  `student.tests/semantics_differential.pl`'s
+  `a-later-demand-instantiates-what-sizeof-skipped` pins.
 
 ## Performance evidence
 
@@ -227,7 +241,7 @@ compiler-work budget to justify and none is claimed.
   files checked, 2 warnings about the two headers' inline bodies).
 - `student.tests/semantics_benchmark.pl` - dumps byte-identical to the
   reference; latency and peak RSS reported above.
-- `student.tests/semantics_differential.pl` - 58 curated reduced reproducers of
+- `student.tests/semantics_differential.pl` - 61 curated reduced reproducers of
   the conversion, ranking, value-category, naming, statement-scope, template
   and rejection corners agree with the reference in exit status and dump.
 - `dev/src/semantic/*.cpp` compile clean under `-Wall -Wextra`.
@@ -332,5 +346,5 @@ reading the stage chose where the handout does not pin the behaviour.
 ### Known differences from the reference
 
 None inside the slice.  The differential harness's curated list holds the
-readings that could have diverged - now including thirteen template
+readings that could have diverged - now including sixteen template
 reproducers - and every one of them agrees in exit status and dump.

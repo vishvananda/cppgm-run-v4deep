@@ -275,6 +275,19 @@ SRC
 template<class T> void take(T);
 void use() { take<int, int>(1); }
 SRC
+	'a-template-id-in-an-initializer-is-not-an-unknown-name' => [ '14.2 names a function, not a constant', <<'SRC' ],
+template<class T> void hello(T);
+void (*p)(int) = &hello<int>;
+SRC
+	'an-unevaluated-operand-demands-no-instantiation' => [ '5.3.3/1 leaves the operand of sizeof unevaluated', <<'SRC' ],
+template<class T> void hello(T);
+void use() { unsigned long n = sizeof(&hello<int>); (void)n; }
+SRC
+	'a-later-demand-instantiates-what-sizeof-skipped' => [ '14.7.1 instantiates on the use that evaluates it', <<'SRC' ],
+template<class T> void hello(T);
+template<class T> void take(T);
+void use() { unsigned long n = sizeof(&hello<int>); (void)n; take(&hello<int>); }
+SRC
 );
 
 sub run_tool

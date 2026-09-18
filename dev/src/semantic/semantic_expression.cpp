@@ -1893,7 +1893,11 @@ Analyzer::Resolved Analyzer::SemSizeof(int node, int scope)
 	}
 	else
 	{
+		// 5.3.3/1: the operand is unevaluated, so a specialization it names is
+		// not one the unit demanded.
+		const size_t mark = instantiations_.size();
 		const Resolved value = SemExpr(operand, scope);
+		UndoInstantiations(mark);
 		target = value.type;
 	}
 	if(target < 0)

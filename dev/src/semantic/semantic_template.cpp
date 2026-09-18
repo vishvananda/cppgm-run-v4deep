@@ -585,6 +585,21 @@ int Analyzer::CandidateEntity(Candidate& candidate)
 	return InstantiateFunctionTemplate(candidate.which, candidate.bindings);
 }
 
+// 5.3.3/1: the operand of `sizeof` is unevaluated, so a specialization it
+// names is not one the unit demanded.  A later demand that *is* evaluated then
+// has to be the one that instantiates it, so the substitution is forgotten as
+// well as the record.
+void Analyzer::UndoInstantiations(size_t mark)
+{
+	while(instantiations_.size() > mark)
+	{
+		const Instantiation note = instantiations_.back();
+		instantiations_.pop_back();
+		specializations_.erase(make_pair(note.which,
+		                                 model_.EntityOf(note.entity).type));
+	}
+}
+
 // The dump prints an instantiation after the unit's own declarations, as a
 // function declaration with the parameters the template's clause wrote.
 void Analyzer::SemInstantiations(vector<int>& out)
