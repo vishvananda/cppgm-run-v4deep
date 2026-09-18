@@ -272,6 +272,15 @@ harness, and each is a reading the standard and the reference agree on:
   directly, so both arms time a compiler and nothing else.  The honest effect is
   smaller than the earlier record claimed and is reported below.
 
+  The same wrapper is still what `pa5/syntax_benchmark.pl` and
+  `pa6/types_benchmark.pl` invoke the reference through, so the absolute
+  reference latency those two plans record, and the paired difference they
+  rest their speed claim on, carry the wrapper's fixed quarter second: a
+  constant cancels in an A/A arm and does not cancel in an A/B one.  Those are
+  earlier stages' records and this audit did not rewrite them; the measurement
+  above is the evidence for whoever corrects them, and the student numbers they
+  quote are unaffected, because both of those labels run this compiler.
+
 ## Performance evidence
 
 The protocol is the one section 9 asks for and is what
