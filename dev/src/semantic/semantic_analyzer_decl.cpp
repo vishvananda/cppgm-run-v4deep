@@ -134,7 +134,7 @@ int ClassKeyOf(const string& spelling)
 
 // A declarator-id may be qualified - `void n::f(T)` - so the name it declares
 // is the last component and everything before it is the scope it lands in.
-void Analyzer::SplitQualifiedName(const string& text, string& qualifier, string& name)
+void Analyzer::SplitQualifiedName(const string& text, string& qualifier, string& name) const
 {
 	int depth = 0;
 	size_t split = string::npos;
@@ -163,6 +163,21 @@ void Analyzer::SplitQualifiedName(const string& text, string& qualifier, string&
 	}
 	qualifier = text.substr(0, split + 2);
 	name = text.substr(split + 2);
+}
+
+// The class an elaborated specifier names, looked up where its own qualifier
+// says: unqualified lookup starts where the specifier is written, so an
+// elaborated `struct S` inside a block finds the `S` an outer scope declared.
+int Analyzer::LookupElaborated(int scope, const string& written) const
+{
+	string qualifier;
+	string name;
+	SplitQualifiedName(written, qualifier, name);
+	if(qualifier.empty())
+	{
+		return model_.LookupTypeUnqualified(scope, name);
+	}
+	return model_.LookupTypeIn(model_.ResolveQualifier(scope, qualifier), name);
 }
 
 void Analyzer::CollectDeclaratorName(int node, string& name)
@@ -426,7 +441,7 @@ void Analyzer::AnalyzeSpecifiers(int node, int scope, Specifiers& out,
 			const int key_node = FindChild(child, "class-key");
 			const int key = ClassKeyOf(AfterColon(Label(key_node)));
 			const string& written = Label(child);
-			int entity = model_.LookupType(scope, written);
+			int entity = LookupElaborated(scope, written);
 			if(entity < 0 || model_.EntityOf(entity).kind != kEntityClass)
 			{
 				entity = DeclareClass(scope, written, key, false);

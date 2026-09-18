@@ -460,7 +460,7 @@ void Analyzer::AnalyzeClassForward(int node, int scope)
 	       ? kClassKeyStruct : kClassKeyClass);
 	// An elaborated class specifier may find a type an ordinary-name binding
 	// hides (3.4.4/2), so the type category is searched on its own.
-	int entity = model_.LookupType(scope, written);
+	int entity = LookupElaborated(scope, written);
 	if(entity >= 0 && model_.EntityOf(entity).kind == kEntityClass)
 	{
 		AddTypeBinding(scope, written, entity, key, -1);

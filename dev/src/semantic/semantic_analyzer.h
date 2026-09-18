@@ -145,11 +145,12 @@ private:
 	                       const std::string& declared_name, bool declare_introduced);
 	int BuildDeclarator(int node, int base, int scope);
 	int MemberPointerClass(const std::string& spelling, int scope);
+	int LookupElaborated(int scope, const std::string& written) const;
 	int BuildParameterClause(int node, int scope, std::vector<int>& params, bool& varargs,
 	                         std::vector<std::pair<std::string, int> >* names);
 	int BuildSuffix(int node, int base, int scope, int quals, int func_ref);
 	void CollectDeclaratorName(int node, std::string& name);
-	void SplitQualifiedName(const std::string& text, std::string& qualifier, std::string& name);
+	void SplitQualifiedName(const std::string& text, std::string& qualifier, std::string& name) const;
 
 	// --- classes, enums, scopes ------------------------------------------
 	int AnalyzeClassSpecifier(int node, int scope, const std::string& declared_name,
